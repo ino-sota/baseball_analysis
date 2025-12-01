@@ -19,6 +19,9 @@
   button:hover { background: #e2e6ea; }
   button.primary { background: var(--primary); color: white; border: none; }
   
+  /* ■ 追加: CSVアップロード用スタイル */
+  .upload-area { background: #e9ecef; padding: 10px; border-radius: 5px; margin-bottom: 15px; border: 2px dashed #ccc; text-align: center; font-size: 0.9rem; }
+  
   /* Grid & Layout */
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
   .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -74,6 +77,13 @@
 <header>⚾ 野球データ解析ラボ</header>
 
 <div class="container">
+
+  <div class="card upload-area">
+    <div style="font-weight:bold; margin-bottom:5px;">📂 過去データ(CSV)の取り込み</div>
+    <div style="font-size:0.8rem; color:#666; margin-bottom:10px;">スプレッドシートからダウンロードしたCSVを読み込むと、直近データと合算して解析できます。</div>
+    <input type="file" id="csv-file" accept=".csv" onchange="handleCsvUpload(this)" multiple>
+    <div id="csv-status" style="margin-top:5px; font-weight:bold; color:#0056b3;"></div>
+  </div>
 
   <div id="step-team" class="card">
     <div class="section-head">Step 1: チーム選択</div>
@@ -212,16 +222,146 @@ async function fetchData() {
 }
 
 function processRawData(rows) {
-  ALL_DATA = rows;
+  // GASからのデータもCSVからのデータもここで統合
+  // ALL_DATAに結合する
+  // 重複排除などはしていないため、GameIDで管理する必要があるが、簡易的に追加していく
   rows.forEach(r => {
-    // 0:ID, 1:P, 2:B, 3:Inn, 4:Count/Meta, 13:Name
-    if (r[1] === "SYSTEM_LINEUP") {
-      try {
-        const meta = JSON.parse(r[4]);
-        GAME_META[r[0]] = { top: meta.topTeam, btm: meta.btmTeam, name: r[13], date: new Date(r[13]).toLocaleDateString() };
-      } catch(e){}
-    }
+      ALL_DATA.push(r); // 追加
+      // 0:ID, 1:P, 2:B, 3:Inn, 4:Count/Meta, 13:Name
+      if (r[1] === "SYSTEM_LINEUP") {
+        try {
+          // CSVの場合、ダブルクォートが二重になっている場合などのエスケープ解除が必要な場合があるが
+          // JSON.parseが通ればOK
+          const meta = JSON.parse(r[4]);
+          GAME_META[r[0]] = { top: meta.topTeam, btm: meta.btmTeam, name: r[13], date: new Date(r[13]).toLocaleDateString() };
+        } catch(e){}
+      }
   });
+  
+  // チームリストの更新（CSVに含まれる新しいチームがあるかもしれないため）
+  updateTeamListFromData();
+}
+
+function updateTeamListFromData() {
+    // GAME_METAからチーム名を抽出してTEAM_LISTを更新
+    let teams = new Set(TEAM_LIST);
+    Object.values(GAME_META).forEach(m => {
+        if(m.top) teams.add(m.top);
+        if(m.btm) teams.add(m.btm);
+    });
+    TEAM_LIST = Array.from(teams).sort();
+    
+    // 現在選択中のチームがあれば維持、なければ再描画
+    const sel = document.getElementById('team-select');
+    const current = sel.value;
+    initTeamSelect();
+    if(current) sel.value = current;
+}
+
+// ■■■ 追加: CSV読み込み処理 ■■■
+function handleCsvUpload(input) {
+  if (input.files.length === 0) return;
+  const files = Array.from(input.files);
+  let loadedCount = 0;
+
+  document.getElementById('csv-status').innerText = "読み込み中...";
+
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const text = e.target.result;
+      const rows = parseCSV(text);
+      
+      // ヘッダー行判定（簡易的：1列目が"Timestamp"や"Date"ならヘッダーとみなす）
+      // GASの配列はヘッダーなしで来る前提だが、CSVはヘッダーがあることが多い
+      let startIndex = 0;
+      if (rows.length > 0 && (rows[0][0].includes("Timestamp") || rows[0][0].includes("日付"))) {
+         startIndex = 1;
+      }
+      
+      // B列(index 1)からO列(index 14)まで抽出して、GASのログ形式に合わせる
+      // スプレッドシートをCSVにすると、A列(Timestamp)から始まることが多い。
+      // GASの logs データは B列(GameID) から始まっている。
+      // ここで列ズレを補正する必要がある。
+      // データの1列目が日付っぽい形式ならA列ありと判断してshiftする。
+      
+      const formattedRows = [];
+      for(let i = startIndex; i < rows.length; i++) {
+         let row = rows[i];
+         if(row.length < 5) continue; // 空行などはスキップ
+         
+         // A列（タイムスタンプ）が含まれている場合、削除してGASの形式(GameID始まり)に合わせる
+         // 判定：row[0]が日付時刻っぽい、かつrow[1]がGAME-XXX
+         if (row[0].match(/\d{4}\/\d{1,2}\/\d{1,2}/) || row[1].includes("GAME-")) {
+            // A列を捨てて、B列以降を使う
+            // GASの配列: [GameID, Pitcher, Batter, Inn, Count, Ball, CX, CY, Res, Qual, HX, HY, Spd, Name]
+            // CSV: [Time, GameID, Pitcher, Batter, Inn, Count, Ball, CX, CY, Res, Qual, HX, HY, Spd, Name]
+             row.shift(); 
+         }
+         formattedRows.push(row);
+      }
+      
+      processRawData(formattedRows);
+      loadedCount++;
+      
+      if(loadedCount === files.length) {
+         document.getElementById('csv-status').innerText = `${files.length}ファイルの読み込み完了!`;
+         // 画面をリフレッシュ
+         if(SELECTED_TEAM) {
+             onTeamSelected(); // 試合リスト再描画
+         } else {
+             initTeamSelect();
+         }
+      }
+    };
+    reader.readAsText(file);
+  });
+}
+
+// カンマを含むCSVを正しくパースする関数
+function parseCSV(text) {
+    const rows = [];
+    let currentRow = [];
+    let currentCell = "";
+    let inQuote = false;
+    
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const nextChar = text[i + 1];
+
+        if (inQuote) {
+            if (char === '"' && nextChar === '"') {
+                currentCell += '"';
+                i++; // Skip next quote
+            } else if (char === '"') {
+                inQuote = false;
+            } else {
+                currentCell += char;
+            }
+        } else {
+            if (char === '"') {
+                inQuote = true;
+            } else if (char === ',') {
+                currentRow.push(currentCell);
+                currentCell = "";
+            } else if (char === '\n' || char === '\r') {
+                if (currentCell || currentRow.length > 0) {
+                    currentRow.push(currentCell);
+                    rows.push(currentRow);
+                }
+                currentRow = [];
+                currentCell = "";
+                if (char === '\r' && nextChar === '\n') i++; // Handle CRLF
+            } else {
+                currentCell += char;
+            }
+        }
+    }
+    if (currentCell || currentRow.length > 0) {
+        currentRow.push(currentCell);
+        rows.push(currentRow);
+    }
+    return rows;
 }
 
 function initTeamSelect() {
@@ -326,8 +466,8 @@ function initStatObj() {
 function calcStat(s, r, isBat) {
   // 5:Ball, 6:CX, 8:Res, 9:Qual, 10:HX, 11:HY, 12:Spd
   const ball = r[5] || "不明";
-  const cx = r[6];
-  const res = r[8].replace(/\r?\n/g,'');
+  const cx = parseInt(r[6]); // CSVからは文字列で来る可能性があるのでint変換
+  const res = r[8] ? r[8].replace(/\r?\n/g,'') : "";
   const spd = parseInt(r[12]);
   const cnt = r[4] || "不明";
 
