@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>野球データ解析ラボ</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root { --primary: #0056b3; --bg: #f4f7f6; --card: #ffffff; --border: #e0e0e0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; background: var(--bg); color: #333; margin: 0; padding-bottom: 60px; }
+  header { background: var(--primary); color: white; padding: 12px; text-align: center; font-weight: bold; }
+  .container { max-width: 1100px; margin: 20px auto; padding: 0 10px; }
+  .card { background: var(--card); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 15px; margin-bottom: 15px; }
+  .section-head { font-weight: bold; color: var(--primary); border-bottom: 2px solid #eee; padding-bottom: 5px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+  
+  /* Inputs */
+  select, button { padding: 10px; border-radius: 4px; border: 1px solid #ccc; font-size: 0.95rem; }
+  button { cursor: pointer; background: #f8f9fa; transition: 0.2s; }
+  button:hover { background: #e2e6ea; }
+  button.primary { background: var(--primary); color: white; border: none; }
+  
+  /* Grid & Layout */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  @media (max-width: 768px) { .grid-2, .grid-4 { grid-template-columns: 1fr; } }
+
+  /* Selection UI */
+  .selection-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; max-height: 250px; overflow-y: auto; padding: 5px; background: #fafafa; border: 1px solid #eee; }
+  .check-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; background: white; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
+  
+  /* Mode Buttons */
+  .mode-container { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; padding: 20px 0; }
+  .mode-btn { width: 140px; height: 110px; display: flex; flex-direction: column; justify-content: center; align-items: center; background: white; border: 2px solid #ddd; border-radius: 8px; color: #555; font-weight: bold; }
+  .mode-btn:hover { border-color: var(--primary); color: var(--primary); background: #eef5fc; }
+
+  /* Stats Boxes */
+  .stat-box { background: #fdfdfd; border: 1px solid #eee; padding: 10px; text-align: center; border-radius: 5px; }
+  .stat-val { font-size: 1.4rem; font-weight: bold; color: #333; }
+  .stat-lbl { font-size: 0.75rem; color: #777; }
+  
+  /* Visuals: Heatmap */
+  .zone-container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; width: 200px; margin: 0 auto; background: #999; border: 2px solid #333; }
+  .zone-cell { aspect-ratio: 1; background: white; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: bold; position: relative; }
+  .zone-cell.strike { border: 1px solid #bbb; }
+  
+  /* Visuals: Spray Chart */
+  .field-wrap { position: relative; width: 260px; height: 260px; margin: 0 auto; background: #4caf50; border-radius: 8px; overflow: hidden; border: 2px solid #388e3c; }
+  .field-svg { width: 100%; height: 100%; position: absolute; top:0; left:0; }
+  .marker { position: absolute; transform: translate(-50%, -50%); z-index: 10; font-size: 12px; line-height: 1; }
+  /* Spray Shapes */
+  .marker.hit { color: #d32f2f; } /* Red for Hits */
+  .marker.out { color: #1976d2; } /* Blue for Outs */
+  
+  /* Table */
+  table.simple-tbl { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.simple-tbl th { background: #f1f1f1; padding: 6px; border: 1px solid #ddd; font-weight: normal; color: #555; }
+  table.simple-tbl td { padding: 6px; border: 1px solid #ddd; text-align: center; }
+
+  .hidden { display: none !important; }
+  .loading { position: fixed; inset: 0; background: rgba(255,255,255,0.9); z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+  .spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  
+  .legend-item { display: inline-flex; align-items: center; margin-right: 10px; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+
+<div id="loading" class="loading">
+  <div class="spinner"></div>
+  <div style="margin-top:10px; font-weight:bold; color:var(--primary);">データ読み込み中...</div>
+</div>
+
+<header>⚾ 野球データ解析ラボ</header>
+
+<div class="container">
+
+  <div id="step-team" class="card">
+    <div class="section-head">Step 1: チーム選択</div>
+    <div style="text-align:center;">
+      <select id="team-select" onchange="onTeamSelected()" style="width:100%; max-width:400px;">
+        <option value="">チームを選択してください</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="step-game" class="card hidden">
+    <div class="section-head">Step 2: 試合選択 <div style="font-size:0.8rem;"><button onclick="toggleAllGames(true)">全選択</button> <button onclick="toggleAllGames(false)">全解除</button></div></div>
+    <div id="game-list" class="selection-grid"></div>
+    <div style="text-align:center; margin-top:15px;">
+      <button class="primary" onclick="goToModeSelect()" style="width:200px;">次へ</button>
+    </div>
+  </div>
+
+  <div id="step-mode" class="card hidden">
+    <div class="section-head">
+      Step 3: モード選択
+      <button onclick="backToGameSelect()" style="font-size:0.8rem;">戻る</button>
+    </div>
+    <div class="mode-container">
+      <button class="mode-btn" onclick="startAnalysis('batter', 'top10')">🏏 打者<br>TOP 10</button>
+      <button class="mode-btn" onclick="startAnalysis('batter', 'search')">🔍 打者<br>検索</button>
+      <button class="mode-btn" onclick="startAnalysis('pitcher', 'top5')">⚾ 投手<br>TOP 5</button>
+      <button class="mode-btn" onclick="startAnalysis('pitcher', 'search')">🔍 投手<br>検索</button>
+    </div>
+  </div>
+
+  <div id="dashboard" class="hidden">
+    <div style="margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+      <button onclick="backToMode()">← モード選択へ</button>
+      <div id="mode-title" style="font-weight:bold; color:var(--primary);"></div>
+    </div>
+
+    <div class="card" id="list-card">
+      <div id="player-buttons" style="display:flex; flex-wrap:wrap; gap:5px;"></div>
+      <div style="text-align:center; margin-top:5px;">
+        <select id="player-search" class="hidden" onchange="renderStats(this.value)" style="width:100%; max-width:300px;"></select>
+      </div>
+    </div>
+
+    <div id="stats-area" class="hidden">
+      <div class="card">
+        <h2 id="player-name" style="text-align:center; margin:0 0 15px 0; color:var(--primary);"></h2>
+        <div id="main-stats-grid" class="grid-4" style="grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));">
+          </div>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <div class="card" style="text-align:center;">
+            <div class="section-head">打球方向 (Spray Chart)</div>
+            <div style="margin-bottom:10px; font-size:0.8rem; display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+              <label><input type="checkbox" id="spray-hit" checked onchange="updateVisuals()"> 安打(赤)</label>
+              <label><input type="checkbox" id="spray-out" checked onchange="updateVisuals()"> 凡打(青)</label>
+            </div>
+            <div style="margin-bottom:5px; font-size:0.75rem;">
+               ●ゴロ ▲フライ ◆ライナー ✖バント
+            </div>
+            <div class="field-wrap">
+              <svg class="field-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <path d="M 50,85 L 85,50 A 45,45 0 0,0 15,50 Z" fill="#ccb57e" />
+                <line x1="50" y1="85" x2="0" y2="35" stroke="white" stroke-width="0.5" />
+                <line x1="50" y1="85" x2="100" y2="35" stroke="white" stroke-width="0.5" />
+                <path d="M 0,35 A 60,60 0 0,1 100,35" fill="none" stroke="white" stroke-width="1" />
+              </svg>
+              <div id="spray-container"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-head">状況別チャート</div>
+            <div style="height:250px;">
+              <canvas id="situation-chart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card" style="text-align:center;">
+            <div class="section-head">コース別データ (捕手視点)</div>
+            <div style="margin-bottom:10px;">
+              <select id="zone-mode" onchange="updateVisuals()">
+                </select>
+              <select id="zone-filter" onchange="updateVisuals()" class="hidden" style="margin-left:5px;">
+                <option value="ALL">全球種</option>
+                </select>
+            </div>
+            <div class="zone-container" id="zone-heatmap"></div>
+          </div>
+
+          <div class="card">
+            <div class="section-head">球種別詳細 / 速度</div>
+            <div id="detail-table-container"></div>
+            <p style="font-size:0.7rem; color:#888; text-align:right; margin-top:5px;">※速度は平均±2標準偏差の範囲を集計</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ■■■ 設定: ここにデプロイしたGASのURLを貼る ■■■
+const GAS_URL = "https://script.google.com/macros/s/AKfycbztZidK6NKz8jrTOeJkD6b07Qxn94sh2MsND3zOoiR8ViOl5Kn5XaI_tTxKPjwRLFO7/exec"; 
+
+let ALL_DATA = [];
+let TEAM_LIST = [];
+let GAME_META = {};
+let SELECTED_TEAM = "";
+let SELECTED_GAMES = [];
+let CURRENT_MODE = { role: "", type: "" }; 
+let STATS_CACHE = {};
+let CHART_INSTANCE = null;
+
+window.onload = function() {
+  if (GAS_URL.includes("YOUR_GAS")) { alert("HTML内のGAS_URLを設定してください"); return; }
+  fetchData();
+};
+
+async function fetchData() {
+  try {
+    const res = await fetch(`${GAS_URL}?type=all_data`);
+    const data = await res.json();
+    if (data.teams && data.logs) {
+      TEAM_LIST = data.teams;
+      processRawData(data.logs);
+    } else { alert("データ形式エラー"); }
+    document.getElementById('loading').classList.add('hidden');
+    initTeamSelect();
+  } catch(e) { alert("通信エラー: " + e); }
+}
+
+function processRawData(rows) {
+  ALL_DATA = rows;
+  rows.forEach(r => {
+    // 0:ID, 1:P, 2:B, 3:Inn, 4:Count/Meta, 13:Name
+    if (r[1] === "SYSTEM_LINEUP") {
+      try {
+        const meta = JSON.parse(r[4]);
+        GAME_META[r[0]] = { top: meta.topTeam, btm: meta.btmTeam, name: r[13], date: new Date(r[13]).toLocaleDateString() };
+      } catch(e){}
+    }
+  });
+}
+
+function initTeamSelect() {
+  const s = document.getElementById('team-select');
+  s.innerHTML = '<option value="">チームを選択してください</option>';
+  TEAM_LIST.forEach(t => s.add(new Option(t, t)));
+}
+function onTeamSelected() {
+  SELECTED_TEAM = document.getElementById('team-select').value;
+  if(SELECTED_TEAM) {
+    document.getElementById('step-game').classList.remove('hidden');
+    renderGameList();
+  }
+}
+function renderGameList() {
+  const c = document.getElementById('game-list'); c.innerHTML = "";
+  const ids = Object.keys(GAME_META).filter(id => {
+    const m = GAME_META[id]; return m.top === SELECTED_TEAM || m.btm === SELECTED_TEAM;
+  }).reverse();
+  if(ids.length===0) c.innerHTML = "<div style='padding:10px;'>試合記録がありません</div>";
+  ids.forEach(id => {
+    const m = GAME_META[id];
+    const d = document.createElement('div'); d.className = 'check-item';
+    d.innerHTML = `<input type="checkbox" class="g-chk" value="${id}" checked> <div><b>${m.name}</b><br><span style="color:#666;font-size:0.8rem">${m.date}</span></div>`;
+    c.appendChild(d);
+  });
+}
+function toggleAllGames(v) { document.querySelectorAll('.g-chk').forEach(e=>e.checked=v); }
+
+function goToModeSelect() {
+  SELECTED_GAMES = Array.from(document.querySelectorAll('.g-chk:checked')).map(e=>e.value);
+  if(SELECTED_GAMES.length===0) { alert("試合を選択してください"); return; }
+  document.getElementById('step-team').classList.add('hidden');
+  document.getElementById('step-game').classList.add('hidden');
+  document.getElementById('step-mode').classList.remove('hidden');
+}
+function backToGameSelect() {
+  document.getElementById('step-mode').classList.add('hidden');
+  document.getElementById('step-game').classList.remove('hidden');
+  document.getElementById('step-team').classList.remove('hidden');
+}
+function backToMode() {
+  document.getElementById('dashboard').classList.add('hidden');
+  document.getElementById('stats-area').classList.add('hidden');
+  document.getElementById('step-mode').classList.remove('hidden');
+}
+
+function startAnalysis(role, type) {
+  CURRENT_MODE = { role, type };
+  document.getElementById('step-mode').classList.add('hidden');
+  document.getElementById('dashboard').classList.remove('hidden');
+  document.getElementById('mode-title').innerText = `${SELECTED_TEAM} ${role==='batter'?'打者':'投手'}`;
+  
+  // ヒートマップの選択肢設定
+  const zm = document.getElementById('zone-mode');
+  zm.innerHTML = "";
+  if (role === 'batter') {
+    zm.add(new Option("コース別打率", "avg"));
+    zm.add(new Option("コース別スイング率", "swing"));
+    document.getElementById('zone-filter').classList.add('hidden');
+  } else {
+    // 投手
+    zm.add(new Option("コース割合 (球種選択可)", "rate"));
+    document.getElementById('zone-filter').classList.remove('hidden');
+  }
+
+  aggregateStats(role);
+  renderPlayerList();
+}
+
+function aggregateStats(role) {
+  STATS_CACHE = {};
+  const isBat = (role === 'batter');
+  
+  const targetLogs = ALL_DATA.filter(r => {
+    if(!SELECTED_GAMES.includes(r[0])) return false;
+    if(r[1]==="SYSTEM_LINEUP" || r[8]==="GAME_START") return false;
+    const m = GAME_META[r[0]]; if(!m) return false;
+    const isTop = r[3].includes("表");
+    const atk = isTop ? m.top : m.btm;
+    return isBat ? (atk === SELECTED_TEAM) : (atk !== SELECTED_TEAM);
+  });
+
+  targetLogs.forEach(r => {
+    const name = isBat ? r[2] : r[1];
+    if(!name) return;
+    if(!STATS_CACHE[name]) STATS_CACHE[name] = initStatObj();
+    calcStat(STATS_CACHE[name], r, isBat);
+  });
+}
+
+function initStatObj() {
+  return {
+    pa:0, ab:0, h:0, h2:0, h3:0, hr:0, bb:0, so:0, outs:0, pitches:0,
+    courses: Array(26).fill(0).map(()=>({tot:0, hit:0, swing:0, typeCount:{}})),
+    balls: {}, // { Straight: {tot, swing, hit, speed:[]} }
+    counts: {}, // { "0-0": {tot, swing, typeCount:{}} }
+    results: [] // Spray data
+  };
+}
+
+function calcStat(s, r, isBat) {
+  // 5:Ball, 6:CX, 8:Res, 9:Qual, 10:HX, 11:HY, 12:Spd
+  const ball = r[5] || "不明";
+  const cx = r[6];
+  const res = r[8].replace(/\r?\n/g,'');
+  const spd = parseInt(r[12]);
+  const cnt = r[4] || "不明";
+
+  s.pitches++;
+
+  // 球種別データ初期化
+  if(!s.balls[ball]) s.balls[ball] = {tot:0, swing:0, hit:0, speed:[]};
+  s.balls[ball].tot++;
+  if(!isNaN(spd) && spd > 60) s.balls[ball].speed.push(spd);
+
+  // カウント別データ初期化
+  if(!s.counts[cnt]) s.counts[cnt] = {tot:0, swing:0, typeCount:{}};
+  s.counts[cnt].tot++;
+  if(!s.counts[cnt].typeCount[ball]) s.counts[cnt].typeCount[ball] = 0;
+  s.counts[cnt].typeCount[ball]++;
+
+  // コースデータ
+  if(cx>=1 && cx<=25) {
+    s.courses[cx].tot++;
+    if(!s.courses[cx].typeCount[ball]) s.courses[cx].typeCount[ball] = 0;
+    s.courses[cx].typeCount[ball]++;
+  }
+
+  // スイング判定
+  const isSwing = ["空振り","ファール","安打","ゴロ","フライ","ライナー","本塁打","二塁打","三塁打"].some(k=>res.includes(k)) || res.includes("打");
+  if(isSwing) {
+    s.balls[ball].swing++;
+    s.counts[cnt].swing++;
+    if(cx>=1 && cx<=25) s.courses[cx].swing++;
+  }
+
+  // 結果判定 (最終球のみ)
+  let isHit = false;
+  if(res.includes("安打")||res.includes("本塁打")||res.includes("二塁打")||res.includes("三塁打")) {
+    s.pa++; s.ab++; s.h++; isHit=true;
+    s.balls[ball].hit++;
+    if(res.includes("二塁打")) s.h2++;
+    if(res.includes("本塁打")) s.hr++;
+    if(cx>=1 && cx<=25) s.courses[cx].hit++;
+  } else if(res.includes("四球")||res.includes("死球")) {
+    s.pa++; s.bb++;
+  } else if(res.includes("犠")) {
+    s.pa++;
+  } else if(res.includes("アウト")||res.includes("失策")||res.includes("併殺")||res.includes("三振")||res.includes("打")||res.includes("ゴロ")||res.includes("フライ")) {
+    // 凡打系
+    if(!res.includes("ボール")&&!res.includes("見逃し")&&!res.includes("空振り")&&!res.includes("ファール")) {
+      s.pa++; s.ab++; s.outs++;
+      if(res.includes("併殺")) s.outs++;
+      if(res.includes("三重殺")) s.outs+=2;
+      if(res.includes("三振")) s.so++;
+    }
+  }
+
+  // プロット (Quality: ゴロ, フライ, ライナー, バント)
+  if(r[10] && r[11]) {
+    s.results.push({ x:r[10], y:r[11], type:isHit?'hit':'out', qual:r[9]||"不明" });
+  }
+}
+
+function renderPlayerList() {
+  const c = document.getElementById('player-buttons');
+  const sel = document.getElementById('player-search');
+  c.innerHTML = ""; sel.innerHTML = "<option value=''>選手を選択...</option>";
+  
+  const isBat = (CURRENT_MODE.role === 'batter');
+  let arr = Object.keys(STATS_CACHE).map(n => ({ n, d: STATS_CACHE[n], val: isBat ? STATS_CACHE[n].pa : STATS_CACHE[n].outs }));
+  arr.sort((a,b) => b.val - a.val);
+
+  if (CURRENT_MODE.type.includes('top')) {
+    const limit = isBat ? 10 : 5;
+    arr.slice(0, limit).forEach(p => {
+      const btn = document.createElement('button');
+      btn.style.width = "auto"; btn.style.padding = "10px";
+      const sub = isBat ? `${p.val}打席` : `${(p.val/3).toFixed(1)}回`;
+      btn.innerHTML = `<b>${p.n}</b><br><span style="font-size:0.8rem;color:#666">${sub}</span>`;
+      btn.onclick = () => renderStats(p.n);
+      c.appendChild(btn);
+    });
+    document.getElementById('player-search').classList.add('hidden');
+    if(arr.length>0) renderStats(arr[0].n);
+  } else {
+    arr.forEach(p => sel.add(new Option(p.n, p.n)));
+    document.getElementById('player-search').classList.remove('hidden');
+  }
+}
+
+let CURRENT_DATA = null;
+function renderStats(name) {
+  if(!name) return;
+  CURRENT_DATA = STATS_CACHE[name];
+  document.getElementById('stats-area').classList.remove('hidden');
+  document.getElementById('player-name').innerText = name;
+  
+  const d = CURRENT_DATA;
+  const isBat = (CURRENT_MODE.role === 'batter');
+  const avg = d.ab>0 ? (d.h/d.ab).toFixed(3).replace(/^0/,'') : ".000";
+  const inn = Math.floor(d.outs/3) + (d.outs%3===0?"":d.outs%3===1?".1":".2");
+  
+  // メイン指標ボックス生成
+  const box = (l, v) => `<div class="stat-box"><div class="stat-val">${v}</div><div class="stat-lbl">${l}</div></div>`;
+  let h = "";
+  if(isBat) {
+    h += box("打席", d.pa) + box("打率", avg) + box("打数", d.ab) + box("安打", d.h);
+    h += box("2塁打", d.h2) + box("本塁打", d.hr) + box("四死球", d.bb) + box("三振", d.so);
+  } else {
+    h += box("投球回", inn) + box("被打率", d.ab>0?(d.h/d.ab).toFixed(3).replace(/^0/,''):".000");
+    h += box("奪三振", d.so) + box("被安打", d.h) + box("与四死球", d.bb) + box("対右率", "-") + box("対左率", "-");
+  }
+  document.getElementById('main-stats-grid').innerHTML = h;
+  
+  // フィルター更新 (投手用)
+  if(!isBat) {
+    const sel = document.getElementById('zone-filter');
+    sel.innerHTML = "<option value='ALL'>全球種</option>";
+    Object.keys(d.balls).forEach(k => sel.add(new Option(k, k)));
+  }
+
+  updateVisuals();
+  renderChart(d, isBat);
+  renderTable(d, isBat);
+}
+
+function updateVisuals() {
+  if(!CURRENT_DATA) return;
+  // ヒートマップ
+  const zc = document.getElementById('zone-heatmap'); zc.innerHTML = "";
+  const mode = document.getElementById('zone-mode').value;
+  const filter = document.getElementById('zone-filter').value;
+  
+  for(let i=1; i<=25; i++) {
+    const c = CURRENT_DATA.courses[i];
+    const div = document.createElement('div');
+    div.className = 'zone-cell';
+    if([7,8,9,12,13,14,17,18,19].includes(i)) div.classList.add('strike');
+    
+    let val = 0, text = "";
+    if (c.tot > 0) {
+      if (mode === 'avg') { // 打率
+        val = c.hit / c.tot; text = `.${Math.round(val*1000)}`;
+      } else if (mode === 'swing') { // スイング率
+        val = c.swing / c.tot; text = `${Math.round(val*100)}%`;
+      } else if (mode === 'rate') { // コース割合 (投手)
+        // フィルタされた球種の総数に対するこのコースの割合
+        let targetCount = (filter === 'ALL') ? c.tot : (c.typeCount[filter] || 0);
+        let totalTarget = 0;
+        CURRENT_DATA.courses.forEach(cc => totalTarget += (filter==='ALL'?cc.tot:(cc.typeCount[filter]||0)));
+        if (totalTarget > 0 && targetCount > 0) {
+          val = targetCount / totalTarget;
+          text = `${Math.round(val*100)}%`;
+          // 投手用は見やすくするため強調
+          val = val * 3; // 33%でMAXになるくらいに補正
+        }
+      }
+      if(text) {
+        div.style.backgroundColor = `rgba(255,0,0,${Math.min(val, 1)})`;
+        if(val>0.5) div.style.color="white";
+        div.innerText = text;
+      }
+    }
+    zc.appendChild(div);
+  }
+
+  // スプレーチャート
+  const sc = document.getElementById('spray-container'); sc.innerHTML = "";
+  const sHit = document.getElementById('spray-hit').checked;
+  const sOut = document.getElementById('spray-out').checked;
+  
+  CURRENT_DATA.results.forEach(r => {
+    if(r.type==='hit' && !sHit) return;
+    if(r.type==='out' && !sOut) return;
+    
+    const d = document.createElement('div');
+    d.className = `marker ${r.type}`;
+    d.style.left = r.x + "%"; d.style.top = r.y + "%";
+    
+    // 形状変化
+    let mark = "●"; // ゴロ(デフォルト)
+    if(r.qual.includes("フライ")) mark = "▲";
+    if(r.qual.includes("ライナー")) mark = "◆";
+    if(r.qual.includes("バント")) mark = "✖";
+    d.innerHTML = mark;
+    sc.appendChild(d);
+  });
+}
+
+function renderChart(d, isBat) {
+  const ctx = document.getElementById('situation-chart').getContext('2d');
+  if(CHART_INSTANCE) CHART_INSTANCE.destroy();
+
+  const labels = Object.keys(d.counts).sort();
+  
+  if (isBat) {
+    // 打者: カウント別スイング率 (折れ線 or 棒)
+    const data = labels.map(k => d.counts[k].tot>0 ? (d.counts[k].swing/d.counts[k].tot*100) : 0);
+    CHART_INSTANCE = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{ label: 'カウント別スイング率(%)', data: data, backgroundColor: '#0056b3' }]
+      },
+      options: { responsive:true, maintainAspectRatio:false, scales:{y:{max:100}} }
+    });
+  } else {
+    // 投手: カウント別球種割合 (積み上げ棒)
+    const allTypes = Object.keys(d.balls);
+    const datasets = allTypes.map((t, i) => {
+      const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0'];
+      return {
+        label: t,
+        data: labels.map(cnt => {
+           const c = d.counts[cnt];
+           return c.tot>0 ? ((c.typeCount[t]||0)/c.tot*100) : 0;
+        }),
+        backgroundColor: colors[i % colors.length]
+      };
+    });
+
+    CHART_INSTANCE = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: labels, datasets: datasets },
+      options: { 
+        responsive:true, maintainAspectRatio:false,
+        scales:{ x:{stacked:true}, y:{stacked:true, max:100} },
+        plugins: { tooltip: { callbacks: { label: (c)=>` ${c.dataset.label}: ${Math.round(c.raw)}%` } } }
+      }
+    });
+  }
+}
+
+function renderTable(d, isBat) {
+  const div = document.getElementById('detail-table-container');
+  let h = `<table class="simple-tbl">`;
+  
+  if (isBat) {
+    h += `<tr><th>球種</th><th>打率</th><th>スイング率</th></tr>`;
+    for(const t in d.balls) {
+      const b = d.balls[t];
+      const avg = b.tot>0 ? (b.hit/b.tot).toFixed(3).replace(/^0/,'') : "-"; // 正確な打数は球種別に出せないので「安打/球数」で代用するか、空欄にするが、要件は「球種別打率」。母数が打数じゃないので参考値になる
+      // 入力データ的に「ボール」は打数に含まれないが、ここでは単純化して表示
+      const sw = b.tot>0 ? Math.round(b.swing/b.tot*100)+"%" : "-";
+      h += `<tr><td>${t}</td><td>${avg}</td><td>${sw}</td></tr>`;
+    }
+  } else {
+    h += `<tr><th>球種</th><th>平均(km/h)</th><th>Max</th><th>投球数</th></tr>`;
+    for(const t in d.balls) {
+      const b = d.balls[t];
+      const spds = b.speed;
+      let avg = "-", max = "-";
+      if(spds.length > 0) {
+        const sum = spds.reduce((a,v)=>a+v,0);
+        const mean = sum/spds.length;
+        const sd = Math.sqrt(spds.map(x=>Math.pow(x-mean,2)).reduce((a,v)=>a+v,0)/spds.length);
+        const clean = spds.filter(x => Math.abs(x-mean) <= 2*sd);
+        if(clean.length) avg = (clean.reduce((a,v)=>a+v,0)/clean.length).toFixed(1);
+        max = Math.max(...clean);
+      }
+      h += `<tr><td>${t}</td><td>${avg}</td><td>${max}</td><td>${b.tot}</td></tr>`;
+    }
+  }
+  h += `</table>`;
+  div.innerHTML = h;
+}
+</script>
+</body>
+</html>
