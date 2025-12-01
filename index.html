@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>野球データ解析ラボ</title>
+<title>野球データ解析ラボ V2</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
   :root { --primary: #0056b3; --bg: #f4f7f6; --card: #ffffff; --border: #e0e0e0; }
@@ -19,7 +19,7 @@
   button:hover { background: #e2e6ea; }
   button.primary { background: var(--primary); color: white; border: none; }
   
-  /* ■ 追加: CSVアップロード用スタイル */
+  /* Upload */
   .upload-area { background: #e9ecef; padding: 10px; border-radius: 5px; margin-bottom: 15px; border: 2px dashed #ccc; text-align: center; font-size: 0.9rem; }
   
   /* Grid & Layout */
@@ -27,9 +27,16 @@
   .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   @media (max-width: 768px) { .grid-2, .grid-4 { grid-template-columns: 1fr; } }
 
-  /* Selection UI */
-  .selection-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; max-height: 250px; overflow-y: auto; padding: 5px; background: #fafafa; border: 1px solid #eee; }
-  .check-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; background: white; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
+  /* Selection UI (Folder Style) */
+  .folder-details { margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; background: white; }
+  .folder-summary { padding: 10px; background: #f8f9fa; cursor: pointer; font-weight: bold; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+  .folder-summary::-webkit-details-marker { display: none; }
+  .folder-summary::after { content: "▼"; font-size: 0.8rem; color: #666; transition: transform 0.2s; }
+  .folder-details[open] .folder-summary::after { transform: rotate(180deg); }
+  .folder-content { padding: 5px; background: #fff; max-height: 300px; overflow-y: auto; }
+  
+  .check-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+  .check-item:last-child { border-bottom: none; }
   
   /* Mode Buttons */
   .mode-container { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; padding: 20px 0; }
@@ -41,18 +48,16 @@
   .stat-val { font-size: 1.4rem; font-weight: bold; color: #333; }
   .stat-lbl { font-size: 0.75rem; color: #777; }
   
-  /* Visuals: Heatmap */
+  /* Visuals */
   .zone-container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; width: 200px; margin: 0 auto; background: #999; border: 2px solid #333; }
   .zone-cell { aspect-ratio: 1; background: white; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: bold; position: relative; }
   .zone-cell.strike { border: 1px solid #bbb; }
   
-  /* Visuals: Spray Chart */
   .field-wrap { position: relative; width: 260px; height: 260px; margin: 0 auto; background: #4caf50; border-radius: 8px; overflow: hidden; border: 2px solid #388e3c; }
   .field-svg { width: 100%; height: 100%; position: absolute; top:0; left:0; }
   .marker { position: absolute; transform: translate(-50%, -50%); z-index: 10; font-size: 12px; line-height: 1; }
-  /* Spray Shapes */
-  .marker.hit { color: #d32f2f; } /* Red for Hits */
-  .marker.out { color: #1976d2; } /* Blue for Outs */
+  .marker.hit { color: #d32f2f; } 
+  .marker.out { color: #1976d2; }
   
   /* Table */
   table.simple-tbl { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -63,8 +68,6 @@
   .loading { position: fixed; inset: 0; background: rgba(255,255,255,0.9); z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center; }
   .spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
   @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-  
-  .legend-item { display: inline-flex; align-items: center; margin-right: 10px; font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -95,9 +98,14 @@
   </div>
 
   <div id="step-game" class="card hidden">
-    <div class="section-head">Step 2: 試合選択 <div style="font-size:0.8rem;"><button onclick="toggleAllGames(true)">全選択</button> <button onclick="toggleAllGames(false)">全解除</button></div></div>
-    <div id="game-list" class="selection-grid"></div>
-    <div style="text-align:center; margin-top:15px;">
+    <div class="section-head">
+      Step 2: 試合選択 
+      <div style="font-size:0.8rem;">
+        <button onclick="toggleAllGames(true)">全選択</button> 
+        <button onclick="toggleAllGames(false)">全解除</button>
+      </div>
+    </div>
+    <div id="game-list-container"></div> <div style="text-align:center; margin-top:15px;">
       <button class="primary" onclick="goToModeSelect()" style="width:200px;">次へ</button>
     </div>
   </div>
@@ -131,8 +139,7 @@
     <div id="stats-area" class="hidden">
       <div class="card">
         <h2 id="player-name" style="text-align:center; margin:0 0 15px 0; color:var(--primary);"></h2>
-        <div id="main-stats-grid" class="grid-4" style="grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));">
-          </div>
+        <div id="main-stats-grid" class="grid-4" style="grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));"></div>
       </div>
 
       <div class="grid-2">
@@ -169,11 +176,10 @@
           <div class="card" style="text-align:center;">
             <div class="section-head">コース別データ (捕手視点)</div>
             <div style="margin-bottom:10px;">
-              <select id="zone-mode" onchange="updateVisuals()">
-                </select>
+              <select id="zone-mode" onchange="updateVisuals()"></select>
               <select id="zone-filter" onchange="updateVisuals()" class="hidden" style="margin-left:5px;">
                 <option value="ALL">全球種</option>
-                </select>
+              </select>
             </div>
             <div class="zone-container" id="zone-heatmap"></div>
           </div>
@@ -196,7 +202,7 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbztZidK6NKz8jrTOeJkD6b0
 
 let ALL_DATA = [];
 let TEAM_LIST = [];
-let GAME_META = {};
+let GAME_META = {}; // { GameID: { name, folder, date, top, btm } }
 let SELECTED_TEAM = "";
 let SELECTED_GAMES = [];
 let CURRENT_MODE = { role: "", type: "" }; 
@@ -210,60 +216,72 @@ window.onload = function() {
 
 async function fetchData() {
   try {
-    const res = await fetch(`${GAS_URL}?type=all_data`);
-    const data = await res.json();
-    if (data.teams && data.logs) {
-      TEAM_LIST = data.teams;
-      processRawData(data.logs);
+    // フォルダ情報を含む試合リスト(init)と、全ログ(all_data)を並列取得
+    const [initRes, dataRes] = await Promise.all([
+      fetch(`${GAS_URL}?type=init`),
+      fetch(`${GAS_URL}?type=all_data`)
+    ]);
+    
+    const initData = await initRes.json();
+    const dataData = await dataRes.json();
+
+    if (initData.games && dataData.logs) {
+      // 1. メタデータの構築 (init由来)
+      initData.games.forEach(g => {
+         // g = { id, name, date, folder }
+         GAME_META[g.id] = { 
+           name: g.name, 
+           folder: g.folder || "未分類", 
+           date: g.date, 
+           top: "", btm: "" // 後でログから補完
+         };
+      });
+
+      // 2. ログデータの統合 (all_data由来)
+      processRawData(dataData.logs);
+      
+      // 3. チームリスト更新
+      // GASのinitData.teamsを優先しつつ、ログから見つかったチームも追加
+      let teams = new Set(initData.teams || []);
+      // ログからチーム名を補完
+      Object.values(GAME_META).forEach(m => {
+          if(m.top) teams.add(m.top);
+          if(m.btm) teams.add(m.btm);
+      });
+      TEAM_LIST = Array.from(teams).sort();
+      
     } else { alert("データ形式エラー"); }
+    
     document.getElementById('loading').classList.add('hidden');
     initTeamSelect();
+    
   } catch(e) { alert("通信エラー: " + e); }
 }
 
 function processRawData(rows) {
-  // GASからのデータもCSVからのデータもここで統合
-  // ALL_DATAに結合する
-  // 重複排除などはしていないため、GameIDで管理する必要があるが、簡易的に追加していく
   rows.forEach(r => {
-      ALL_DATA.push(r); // 追加
-      // 0:ID, 1:P, 2:B, 3:Inn, 4:Count/Meta, 13:Name
+      ALL_DATA.push(r); 
+      // 0:ID, 1:P, 2:B, 3:Inn, 4:Count/Meta
       if (r[1] === "SYSTEM_LINEUP") {
         try {
-          // CSVの場合、ダブルクォートが二重になっている場合などのエスケープ解除が必要な場合があるが
-          // JSON.parseが通ればOK
           const meta = JSON.parse(r[4]);
-          GAME_META[r[0]] = { top: meta.topTeam, btm: meta.btmTeam, name: r[13], date: new Date(r[13]).toLocaleDateString() };
+          // GAME_METAにまだない(CSV由来など)か、詳細情報の補完
+          if (!GAME_META[r[0]]) {
+             GAME_META[r[0]] = { name: r[13] || "名称なし", folder: "CSV/未分類", date: "CSVデータ" };
+          }
+          // チーム情報をセット
+          GAME_META[r[0]].top = meta.topTeam;
+          GAME_META[r[0]].btm = meta.btmTeam;
         } catch(e){}
       }
   });
-  
-  // チームリストの更新（CSVに含まれる新しいチームがあるかもしれないため）
-  updateTeamListFromData();
 }
 
-function updateTeamListFromData() {
-    // GAME_METAからチーム名を抽出してTEAM_LISTを更新
-    let teams = new Set(TEAM_LIST);
-    Object.values(GAME_META).forEach(m => {
-        if(m.top) teams.add(m.top);
-        if(m.btm) teams.add(m.btm);
-    });
-    TEAM_LIST = Array.from(teams).sort();
-    
-    // 現在選択中のチームがあれば維持、なければ再描画
-    const sel = document.getElementById('team-select');
-    const current = sel.value;
-    initTeamSelect();
-    if(current) sel.value = current;
-}
-
-// ■■■ 追加: CSV読み込み処理 ■■■
+// ■■■ CSV読み込み処理 (強化版) ■■■
 function handleCsvUpload(input) {
   if (input.files.length === 0) return;
   const files = Array.from(input.files);
   let loadedCount = 0;
-
   document.getElementById('csv-status').innerText = "読み込み中...";
 
   files.forEach(file => {
@@ -271,97 +289,66 @@ function handleCsvUpload(input) {
     reader.onload = function(e) {
       const text = e.target.result;
       const rows = parseCSV(text);
-      
-      // ヘッダー行判定（簡易的：1列目が"Timestamp"や"Date"ならヘッダーとみなす）
-      // GASの配列はヘッダーなしで来る前提だが、CSVはヘッダーがあることが多い
       let startIndex = 0;
-      if (rows.length > 0 && (rows[0][0].includes("Timestamp") || rows[0][0].includes("日付"))) {
-         startIndex = 1;
-      }
-      
-      // B列(index 1)からO列(index 14)まで抽出して、GASのログ形式に合わせる
-      // スプレッドシートをCSVにすると、A列(Timestamp)から始まることが多い。
-      // GASの logs データは B列(GameID) から始まっている。
-      // ここで列ズレを補正する必要がある。
-      // データの1列目が日付っぽい形式ならA列ありと判断してshiftする。
+      if (rows.length > 0 && (rows[0][0].includes("Timestamp") || rows[0][0].includes("日付"))) { startIndex = 1; }
       
       const formattedRows = [];
       for(let i = startIndex; i < rows.length; i++) {
          let row = rows[i];
-         if(row.length < 5) continue; // 空行などはスキップ
-         
-         // A列（タイムスタンプ）が含まれている場合、削除してGASの形式(GameID始まり)に合わせる
-         // 判定：row[0]が日付時刻っぽい、かつrow[1]がGAME-XXX
-         if (row[0].match(/\d{4}\/\d{1,2}\/\d{1,2}/) || row[1].includes("GAME-")) {
-            // A列を捨てて、B列以降を使う
-            // GASの配列: [GameID, Pitcher, Batter, Inn, Count, Ball, CX, CY, Res, Qual, HX, HY, Spd, Name]
-            // CSV: [Time, GameID, Pitcher, Batter, Inn, Count, Ball, CX, CY, Res, Qual, HX, HY, Spd, Name]
-             row.shift(); 
+         if(row.length < 5) continue; 
+         // 列ズレ補正
+         if (row[1] && row[1].includes("GAME-")) { row.shift(); }
+
+         // 日付化されたカウント(1-1等)の復元
+         let cnt = row[4];
+         if (cnt && typeof cnt === 'string' && (cnt.startsWith("20") || cnt.match(/\d{4}[\/\-]/))) {
+             try {
+                 const dateObj = new Date(cnt);
+                 const jstTime = dateObj.getTime() + (9 * 60 * 60 * 1000); 
+                 const jstDate = new Date(jstTime);
+                 const m = jstDate.getUTCMonth() + 1; 
+                 const d = jstDate.getUTCDate();      
+                 if (!isNaN(m) && !isNaN(d)) { row[4] = `${m}-${d}`; }
+             } catch(e) {}
          }
          formattedRows.push(row);
       }
-      
       processRawData(formattedRows);
       loadedCount++;
-      
       if(loadedCount === files.length) {
          document.getElementById('csv-status').innerText = `${files.length}ファイルの読み込み完了!`;
-         // 画面をリフレッシュ
-         if(SELECTED_TEAM) {
-             onTeamSelected(); // 試合リスト再描画
-         } else {
-             initTeamSelect();
-         }
+         updateTeamListFromMeta();
+         if(SELECTED_TEAM) { onTeamSelected(); } else { initTeamSelect(); }
       }
     };
     reader.readAsText(file);
   });
 }
 
-// カンマを含むCSVを正しくパースする関数
 function parseCSV(text) {
-    const rows = [];
-    let currentRow = [];
-    let currentCell = "";
-    let inQuote = false;
-    
+    const rows = []; let currentRow = []; let currentCell = ""; let inQuote = false;
     for (let i = 0; i < text.length; i++) {
-        const char = text[i];
-        const nextChar = text[i + 1];
-
+        const char = text[i]; const nextChar = text[i + 1];
         if (inQuote) {
-            if (char === '"' && nextChar === '"') {
-                currentCell += '"';
-                i++; // Skip next quote
-            } else if (char === '"') {
-                inQuote = false;
-            } else {
-                currentCell += char;
-            }
+            if (char === '"' && nextChar === '"') { currentCell += '"'; i++; } 
+            else if (char === '"') { inQuote = false; } else { currentCell += char; }
         } else {
-            if (char === '"') {
-                inQuote = true;
-            } else if (char === ',') {
-                currentRow.push(currentCell);
-                currentCell = "";
-            } else if (char === '\n' || char === '\r') {
-                if (currentCell || currentRow.length > 0) {
-                    currentRow.push(currentCell);
-                    rows.push(currentRow);
-                }
-                currentRow = [];
-                currentCell = "";
-                if (char === '\r' && nextChar === '\n') i++; // Handle CRLF
-            } else {
-                currentCell += char;
-            }
+            if (char === '"') { inQuote = true; } 
+            else if (char === ',') { currentRow.push(currentCell); currentCell = ""; } 
+            else if (char === '\n' || char === '\r') {
+                if (currentCell || currentRow.length > 0) { currentRow.push(currentCell); rows.push(currentRow); }
+                currentRow = []; currentCell = ""; if (char === '\r' && nextChar === '\n') i++;
+            } else { currentCell += char; }
         }
     }
-    if (currentCell || currentRow.length > 0) {
-        currentRow.push(currentCell);
-        rows.push(currentRow);
-    }
+    if (currentCell || currentRow.length > 0) { currentRow.push(currentCell); rows.push(currentRow); }
     return rows;
+}
+
+function updateTeamListFromMeta() {
+    let teams = new Set(TEAM_LIST);
+    Object.values(GAME_META).forEach(m => { if(m.top) teams.add(m.top); if(m.btm) teams.add(m.btm); });
+    TEAM_LIST = Array.from(teams).sort();
 }
 
 function initTeamSelect() {
@@ -369,6 +356,7 @@ function initTeamSelect() {
   s.innerHTML = '<option value="">チームを選択してください</option>';
   TEAM_LIST.forEach(t => s.add(new Option(t, t)));
 }
+
 function onTeamSelected() {
   SELECTED_TEAM = document.getElementById('team-select').value;
   if(SELECTED_TEAM) {
@@ -376,20 +364,71 @@ function onTeamSelected() {
     renderGameList();
   }
 }
+
+// ■■■ フォルダ対応の試合リスト表示 ■■■
 function renderGameList() {
-  const c = document.getElementById('game-list'); c.innerHTML = "";
-  const ids = Object.keys(GAME_META).filter(id => {
-    const m = GAME_META[id]; return m.top === SELECTED_TEAM || m.btm === SELECTED_TEAM;
-  }).reverse();
-  if(ids.length===0) c.innerHTML = "<div style='padding:10px;'>試合記録がありません</div>";
-  ids.forEach(id => {
+  const container = document.getElementById('game-list-container'); 
+  container.innerHTML = "";
+  
+  // 1. 選択チームに関連する試合を抽出
+  const relevantGames = Object.keys(GAME_META).filter(id => {
     const m = GAME_META[id];
-    const d = document.createElement('div'); d.className = 'check-item';
-    d.innerHTML = `<input type="checkbox" class="g-chk" value="${id}" checked> <div><b>${m.name}</b><br><span style="color:#666;font-size:0.8rem">${m.date}</span></div>`;
-    c.appendChild(d);
+    return m.top === SELECTED_TEAM || m.btm === SELECTED_TEAM;
+  }).map(id => ({id, ...GAME_META[id]}));
+
+  if(relevantGames.length === 0) {
+    container.innerHTML = "<div style='padding:10px;'>試合記録がありません</div>";
+    return;
+  }
+
+  // 2. フォルダごとにグルーピング
+  const grouped = {};
+  const folders = [];
+  relevantGames.forEach(g => {
+    const f = g.folder || "未分類";
+    if (!grouped[f]) { grouped[f] = []; folders.push(f); }
+    grouped[f].push(g);
+  });
+  folders.sort((a,b) => (a==="未分類"?1:(b==="未分類"?-1:a.localeCompare(b))));
+
+  // 3. 描画
+  folders.forEach(fName => {
+    const games = grouped[fName].reverse(); // 新しい順
+    
+    const details = document.createElement('details');
+    details.className = 'folder-details';
+    details.open = true; // デフォルトで開く
+
+    const summary = document.createElement('summary');
+    summary.className = 'folder-summary';
+    summary.innerHTML = `<span>📂 ${fName} <span style="font-weight:normal; font-size:0.8rem;">(${games.length})</span></span>`;
+
+    const content = document.createElement('div');
+    content.className = 'folder-content';
+
+    // フォルダごとの全選択ボタン
+    const batchDiv = document.createElement('div');
+    batchDiv.style.padding = "5px"; batchDiv.style.borderBottom="1px solid #eee"; batchDiv.style.fontSize="0.8rem";
+    batchDiv.innerHTML = `<button onclick="toggleFolderGames(this, true)" style="padding:2px 8px;margin-right:5px;">このフォルダを全選択</button><button onclick="toggleFolderGames(this, false)" style="padding:2px 8px;">解除</button>`;
+    content.appendChild(batchDiv);
+
+    games.forEach(m => {
+      const d = document.createElement('div'); d.className = 'check-item';
+      d.innerHTML = `<input type="checkbox" class="g-chk" value="${m.id}" checked> <div><b>${m.name}</b><br><span style="color:#666;font-size:0.8rem">${m.date}</span></div>`;
+      content.appendChild(d);
+    });
+
+    details.appendChild(summary);
+    details.appendChild(content);
+    container.appendChild(details);
   });
 }
+
 function toggleAllGames(v) { document.querySelectorAll('.g-chk').forEach(e=>e.checked=v); }
+function toggleFolderGames(btn, v) {
+  const wrapper = btn.closest('.folder-content');
+  wrapper.querySelectorAll('.g-chk').forEach(e => e.checked = v);
+}
 
 function goToModeSelect() {
   SELECTED_GAMES = Array.from(document.querySelectorAll('.g-chk:checked')).map(e=>e.value);
@@ -415,7 +454,6 @@ function startAnalysis(role, type) {
   document.getElementById('dashboard').classList.remove('hidden');
   document.getElementById('mode-title').innerText = `${SELECTED_TEAM} ${role==='batter'?'打者':'投手'}`;
   
-  // ヒートマップの選択肢設定
   const zm = document.getElementById('zone-mode');
   zm.innerHTML = "";
   if (role === 'batter') {
@@ -423,7 +461,6 @@ function startAnalysis(role, type) {
     zm.add(new Option("コース別スイング率", "swing"));
     document.getElementById('zone-filter').classList.add('hidden');
   } else {
-    // 投手
     zm.add(new Option("コース割合 (球種選択可)", "rate"));
     document.getElementById('zone-filter').classList.remove('hidden');
   }
@@ -439,6 +476,7 @@ function aggregateStats(role) {
   const targetLogs = ALL_DATA.filter(r => {
     if(!SELECTED_GAMES.includes(r[0])) return false;
     if(r[1]==="SYSTEM_LINEUP" || r[8]==="GAME_START") return false;
+    
     const m = GAME_META[r[0]]; if(!m) return false;
     const isTop = r[3].includes("表");
     const atk = isTop ? m.top : m.btm;
@@ -457,41 +495,33 @@ function initStatObj() {
   return {
     pa:0, ab:0, h:0, h2:0, h3:0, hr:0, bb:0, so:0, outs:0, pitches:0,
     courses: Array(26).fill(0).map(()=>({tot:0, hit:0, swing:0, typeCount:{}})),
-    balls: {}, // { Straight: {tot, swing, hit, speed:[]} }
-    counts: {}, // { "0-0": {tot, swing, typeCount:{}} }
-    results: [] // Spray data
+    balls: {}, counts: {}, results: []
   };
 }
 
 function calcStat(s, r, isBat) {
-  // 5:Ball, 6:CX, 8:Res, 9:Qual, 10:HX, 11:HY, 12:Spd
   const ball = r[5] || "不明";
-  const cx = parseInt(r[6]); // CSVからは文字列で来る可能性があるのでint変換
+  const cx = parseInt(r[6]); 
   const res = r[8] ? r[8].replace(/\r?\n/g,'') : "";
   const spd = parseInt(r[12]);
   const cnt = r[4] || "不明";
 
   s.pitches++;
-
-  // 球種別データ初期化
   if(!s.balls[ball]) s.balls[ball] = {tot:0, swing:0, hit:0, speed:[]};
   s.balls[ball].tot++;
   if(!isNaN(spd) && spd > 60) s.balls[ball].speed.push(spd);
 
-  // カウント別データ初期化
   if(!s.counts[cnt]) s.counts[cnt] = {tot:0, swing:0, typeCount:{}};
   s.counts[cnt].tot++;
   if(!s.counts[cnt].typeCount[ball]) s.counts[cnt].typeCount[ball] = 0;
   s.counts[cnt].typeCount[ball]++;
 
-  // コースデータ
   if(cx>=1 && cx<=25) {
     s.courses[cx].tot++;
     if(!s.courses[cx].typeCount[ball]) s.courses[cx].typeCount[ball] = 0;
     s.courses[cx].typeCount[ball]++;
   }
 
-  // スイング判定
   const isSwing = ["空振り","ファール","安打","ゴロ","フライ","ライナー","本塁打","二塁打","三塁打"].some(k=>res.includes(k)) || res.includes("打");
   if(isSwing) {
     s.balls[ball].swing++;
@@ -499,7 +529,6 @@ function calcStat(s, r, isBat) {
     if(cx>=1 && cx<=25) s.courses[cx].swing++;
   }
 
-  // 結果判定 (最終球のみ)
   let isHit = false;
   if(res.includes("安打")||res.includes("本塁打")||res.includes("二塁打")||res.includes("三塁打")) {
     s.pa++; s.ab++; s.h++; isHit=true;
@@ -512,7 +541,6 @@ function calcStat(s, r, isBat) {
   } else if(res.includes("犠")) {
     s.pa++;
   } else if(res.includes("アウト")||res.includes("失策")||res.includes("併殺")||res.includes("三振")||res.includes("打")||res.includes("ゴロ")||res.includes("フライ")) {
-    // 凡打系
     if(!res.includes("ボール")&&!res.includes("見逃し")&&!res.includes("空振り")&&!res.includes("ファール")) {
       s.pa++; s.ab++; s.outs++;
       if(res.includes("併殺")) s.outs++;
@@ -521,7 +549,6 @@ function calcStat(s, r, isBat) {
     }
   }
 
-  // プロット (Quality: ゴロ, フライ, ライナー, バント)
   if(r[10] && r[11]) {
     s.results.push({ x:r[10], y:r[11], type:isHit?'hit':'out', qual:r[9]||"不明" });
   }
@@ -566,7 +593,6 @@ function renderStats(name) {
   const avg = d.ab>0 ? (d.h/d.ab).toFixed(3).replace(/^0/,'') : ".000";
   const inn = Math.floor(d.outs/3) + (d.outs%3===0?"":d.outs%3===1?".1":".2");
   
-  // メイン指標ボックス生成
   const box = (l, v) => `<div class="stat-box"><div class="stat-val">${v}</div><div class="stat-lbl">${l}</div></div>`;
   let h = "";
   if(isBat) {
@@ -578,7 +604,6 @@ function renderStats(name) {
   }
   document.getElementById('main-stats-grid').innerHTML = h;
   
-  // フィルター更新 (投手用)
   if(!isBat) {
     const sel = document.getElementById('zone-filter');
     sel.innerHTML = "<option value='ALL'>全球種</option>";
@@ -592,7 +617,6 @@ function renderStats(name) {
 
 function updateVisuals() {
   if(!CURRENT_DATA) return;
-  // ヒートマップ
   const zc = document.getElementById('zone-heatmap'); zc.innerHTML = "";
   const mode = document.getElementById('zone-mode').value;
   const filter = document.getElementById('zone-filter').value;
@@ -605,20 +629,17 @@ function updateVisuals() {
     
     let val = 0, text = "";
     if (c.tot > 0) {
-      if (mode === 'avg') { // 打率
+      if (mode === 'avg') { 
         val = c.hit / c.tot; text = `.${Math.round(val*1000)}`;
-      } else if (mode === 'swing') { // スイング率
+      } else if (mode === 'swing') { 
         val = c.swing / c.tot; text = `${Math.round(val*100)}%`;
-      } else if (mode === 'rate') { // コース割合 (投手)
-        // フィルタされた球種の総数に対するこのコースの割合
+      } else if (mode === 'rate') { 
         let targetCount = (filter === 'ALL') ? c.tot : (c.typeCount[filter] || 0);
         let totalTarget = 0;
         CURRENT_DATA.courses.forEach(cc => totalTarget += (filter==='ALL'?cc.tot:(cc.typeCount[filter]||0)));
         if (totalTarget > 0 && targetCount > 0) {
-          val = targetCount / totalTarget;
-          text = `${Math.round(val*100)}%`;
-          // 投手用は見やすくするため強調
-          val = val * 3; // 33%でMAXになるくらいに補正
+          val = targetCount / totalTarget; text = `${Math.round(val*100)}%`;
+          val = val * 3; 
         }
       }
       if(text) {
@@ -630,7 +651,6 @@ function updateVisuals() {
     zc.appendChild(div);
   }
 
-  // スプレーチャート
   const sc = document.getElementById('spray-container'); sc.innerHTML = "";
   const sHit = document.getElementById('spray-hit').checked;
   const sOut = document.getElementById('spray-out').checked;
@@ -638,13 +658,10 @@ function updateVisuals() {
   CURRENT_DATA.results.forEach(r => {
     if(r.type==='hit' && !sHit) return;
     if(r.type==='out' && !sOut) return;
-    
     const d = document.createElement('div');
     d.className = `marker ${r.type}`;
     d.style.left = r.x + "%"; d.style.top = r.y + "%";
-    
-    // 形状変化
-    let mark = "●"; // ゴロ(デフォルト)
+    let mark = "●"; 
     if(r.qual.includes("フライ")) mark = "▲";
     if(r.qual.includes("ライナー")) mark = "◆";
     if(r.qual.includes("バント")) mark = "✖";
@@ -658,33 +675,23 @@ function renderChart(d, isBat) {
   if(CHART_INSTANCE) CHART_INSTANCE.destroy();
 
   const labels = Object.keys(d.counts).sort();
-  
   if (isBat) {
-    // 打者: カウント別スイング率 (折れ線 or 棒)
     const data = labels.map(k => d.counts[k].tot>0 ? (d.counts[k].swing/d.counts[k].tot*100) : 0);
     CHART_INSTANCE = new Chart(ctx, {
       type: 'bar',
-      data: {
-        labels: labels,
-        datasets: [{ label: 'カウント別スイング率(%)', data: data, backgroundColor: '#0056b3' }]
-      },
+      data: { labels: labels, datasets: [{ label: 'カウント別スイング率(%)', data: data, backgroundColor: '#0056b3' }] },
       options: { responsive:true, maintainAspectRatio:false, scales:{y:{max:100}} }
     });
   } else {
-    // 投手: カウント別球種割合 (積み上げ棒)
     const allTypes = Object.keys(d.balls);
     const datasets = allTypes.map((t, i) => {
       const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0'];
       return {
         label: t,
-        data: labels.map(cnt => {
-           const c = d.counts[cnt];
-           return c.tot>0 ? ((c.typeCount[t]||0)/c.tot*100) : 0;
-        }),
+        data: labels.map(cnt => { const c = d.counts[cnt]; return c.tot>0 ? ((c.typeCount[t]||0)/c.tot*100) : 0; }),
         backgroundColor: colors[i % colors.length]
       };
     });
-
     CHART_INSTANCE = new Chart(ctx, {
       type: 'bar',
       data: { labels: labels, datasets: datasets },
@@ -700,13 +707,11 @@ function renderChart(d, isBat) {
 function renderTable(d, isBat) {
   const div = document.getElementById('detail-table-container');
   let h = `<table class="simple-tbl">`;
-  
   if (isBat) {
     h += `<tr><th>球種</th><th>打率</th><th>スイング率</th></tr>`;
     for(const t in d.balls) {
       const b = d.balls[t];
-      const avg = b.tot>0 ? (b.hit/b.tot).toFixed(3).replace(/^0/,'') : "-"; // 正確な打数は球種別に出せないので「安打/球数」で代用するか、空欄にするが、要件は「球種別打率」。母数が打数じゃないので参考値になる
-      // 入力データ的に「ボール」は打数に含まれないが、ここでは単純化して表示
+      const avg = b.tot>0 ? (b.hit/b.tot).toFixed(3).replace(/^0/,'') : "-";
       const sw = b.tot>0 ? Math.round(b.swing/b.tot*100)+"%" : "-";
       h += `<tr><td>${t}</td><td>${avg}</td><td>${sw}</td></tr>`;
     }
