@@ -498,16 +498,16 @@ function initStatObj() {
     balls: {}, counts: {}, results: []
   };
 }
-
 function calcStat(s, r, isBat) {
   // 4:Count(B-S), 5:Ball, 6:CX, 8:Res, 9:Qual, 10:HX, 11:HY, 12:Spd
   const cnt = r[4] || "0-0";
   const ball = r[5] || "不明";
   const cx = parseInt(r[6]); 
   const res = r[8] ? r[8].replace(/\r?\n/g,'') : "";
+  const qual = r[9] || ""; // 打球詳細 (ゴロ、フライ等)
   const spd = parseInt(r[12]);
 
-  // カウント分解 (例: "3-2" -> bCnt=3, sCnt=2)
+  // カウント分解
   let [bCnt, sCnt] = [0, 0];
   if(cnt.includes("-")) {
     const parts = cnt.split("-");
@@ -517,7 +517,7 @@ function calcStat(s, r, isBat) {
 
   s.pitches++;
 
-  // --- 1. 球種・速度・カウント・コースの基本集計 ---
+  // --- 1. 基本集計 ---
   if(!s.balls[ball]) s.balls[ball] = {tot:0, swing:0, hit:0, speed:[]};
   s.balls[ball].tot++;
   if(!isNaN(spd) && spd > 60) s.balls[ball].speed.push(spd);
@@ -533,20 +533,31 @@ function calcStat(s, r, isBat) {
     s.courses[cx].typeCount[ball]++;
   }
 
-  // --- 2. スイング判定 ---
-  const isSwing = ["空振り","ファール","安打","ゴロ","フライ","ライナー","本塁打","二塁打","三塁打"].some(k=>res.includes(k)) || res.includes("打");
+  // --- 2. スイング判定 (修正版) ---
+  // A. 結果テキストによる判定 (併殺、犠打、失策などを追加)
+  const swingKeywords = [
+    "空振り", "ファール", "安打", "本塁打", "二塁打", "三塁打", 
+    "ゴロ", "フライ", "ライナー", 
+    "打", "犠", "併殺", "失策"
+  ];
+  let isSwing = swingKeywords.some(k => res.includes(k));
+
+  // B. 打球詳細による判定 (「アウト」＋「ゴロ」などを救済)
+  // qual(詳細)が入っていて、かつ「不明」でなければスイングとみなす
+  if (qual && qual !== "不明") {
+    isSwing = true;
+  }
+
   if(isSwing) {
     s.balls[ball].swing++;
     s.counts[cnt].swing++;
     if(cx>=1 && cx<=25) s.courses[cx].swing++;
   }
 
-  // --- 3. 打席結果の判定ロジック (ここを大幅強化) ---
-  
-  // フラグ: この球で打席が完了したか
+  // --- 3. 打席結果の判定 (前回の修正を含む) ---
   let isPlateAppearance = false;
 
-  // A. 明示的なヒット・四死球・凡打（入力アプリが明確な結果を出した場合）
+  // A. 明示的なヒット・四死球・凡打
   if(res.includes("安打")||res.includes("本塁打")||res.includes("二塁打")||res.includes("三塁打")) {
     s.pa++; s.ab++; s.h++; 
     s.balls[ball].hit++;
@@ -564,31 +575,19 @@ function calcStat(s, r, isBat) {
     isPlateAppearance = true;
   }
   else if(res.includes("アウト")||res.includes("失策")||res.includes("併殺")||res.includes("三重殺")) {
-    // 明示的なアウト（ゴロアウト、フライアウト、ランナー死など）
     s.pa++; s.ab++; s.outs++;
-    if(res.includes("併殺")) s.outs++; // 2アウト分
-    if(res.includes("三重殺")) s.outs+=2; // 3アウト分
+    if(res.includes("併殺")) s.outs++;
+    if(res.includes("三重殺")) s.outs+=2;
     isPlateAppearance = true;
   } 
   
-  // B. カウントによる自動三振・四球判定 (記録アプリの仕様漏れをカバー)
-  // すでに結果が出ている場合(isPlateAppearance=true)はスキップ
+  // B. カウントによる自動補正 (三振・四球)
   if (!isPlateAppearance) {
-    
-    // 【三振判定】: 2ストライク状態で、空振り or 見逃し
-    // ※ファールはバント以外三振にならないが、ここでは簡易的に「空振り/見逃し」のみを三振とする
-    if (sCnt === 2 && (res.includes("空振り") || res.includes("見逃し"))) {
+    if (sCnt === 2 && (res.includes("空振り") || res.includes("見逃し") || res.includes("三振"))) {
       s.pa++; s.ab++; s.so++; s.outs++;
     }
-    
-    // 【四球判定】: 3ボール状態で、ボール
-    else if (bCnt === 3 && res.includes("ボール")) {
+    else if (bCnt === 3 && (res.includes("ボール") || res.includes("四球"))) {
       s.pa++; s.bb++;
-    }
-    
-    // 【三振判定(特殊)】: もし「三振」という文字が含まれていればカウント無視で加算
-    else if (res.includes("三振")) {
-      s.pa++; s.ab++; s.so++; s.outs++;
     }
   }
 
@@ -600,7 +599,6 @@ function calcStat(s, r, isBat) {
     s.results.push({ x:r[10], y:r[11], type:plotType, qual:r[9]||"不明" });
   }
 }
-
 function renderPlayerList() {
   const c = document.getElementById('player-buttons');
   const sel = document.getElementById('player-search');
