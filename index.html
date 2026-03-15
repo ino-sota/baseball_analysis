@@ -87,9 +87,15 @@
     <input type="file" id="csv-file" accept=".csv" onchange="handleCsvUpload(this)" multiple>
     <div id="csv-status" style="margin-top:5px; font-weight:bold; color:#0056b3;"></div>
   </div>
-
+  <div class="card upload-area" style="background: #eef5fc; border-color: #b6d4fe;">
+    <div style="font-weight:bold; margin-bottom:5px;">📋 選手名簿(CSV)の取り込み</div>
+    <div style="font-size:0.8rem; color:#666; margin-bottom:10px;">A列:背番号, B列:姓, C列:名, D列:学年, E列:投, F列:打 のCSVを読み込ませると、投手のコース別データで「打者の左右」による絞り込みが可能になります。</div>
+    <input type="file" id="roster-file" accept=".csv" onchange="handleRosterUpload(this)">
+    <div id="roster-status" style="margin-top:5px; font-weight:bold; color:var(--primary);">名簿未読み込み</div>
+  </div>
   <div id="step-team" class="card">
     <div class="section-head">Step 1: チーム選択</div>
+
     <div style="text-align:center;">
       <select id="team-select" onchange="onTeamSelected()" style="width:100%; max-width:400px;">
         <option value="">チームを選択してください</option>
@@ -206,6 +212,11 @@
               <select id="zone-filter" onchange="updateVisuals()" class="hidden" style="margin-left:5px;">
                 <option value="ALL">全球種</option>
               </select>
+              <select id="zone-batter" onchange="updateVisuals()" class="hidden" style="margin-left:5px;">
+                <option value="ALL">全打者</option>
+                <option value="右">対 右打者</option>
+                <option value="左">対 左打者</option>
+              </select>
             </div>
             <div class="zone-container" id="zone-heatmap"></div>
           </div>
@@ -237,6 +248,12 @@ let CHART_INSTANCE = null;
 
 window.onload = function() {
   if (GAS_URL.includes("YOUR_GAS")) { alert("HTML内のGAS_URLを設定してください"); return; }
+  
+  // ▼ 追加：保存済みの名簿があれば画面に表示する
+  if (Object.keys(ROSTER).length > 0) {
+    document.getElementById('roster-status').innerText = `保存済みの名簿を自動読み込みしました！`;
+  }
+  
   fetchData();
 };
 
@@ -357,7 +374,39 @@ function handleCsvUpload(input) {
     reader.readAsText(file);
   });
 }
+let ROSTER = JSON.parse(localStorage.getItem('baseball_roster')) || {}; // 名簿データの保存用 { "山田": "右", "田中": "左" }
 
+// ▼▼ 新規追加：名簿CSV読み込み処理 ▼▼
+function handleRosterUpload(input) {
+  if (input.files.length === 0) return;
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const rows = parseCSV(text);
+    let count = 0;
+    rows.forEach(row => {
+      if (row.length >= 6) {
+        // ★変更：姓と名からスペース(半角/全角)を完全に除去して登録する
+        const lastName = row[1] ? row[1].replace(/[\s　]/g, '') : "";
+        const firstName = row[2] ? row[2].replace(/[\s　]/g, '') : "";
+        const batHand = row[5] ? row[5].trim() : "";
+        
+        if (lastName && lastName !== "姓" && (batHand === "右" || batHand === "左")) {
+           ROSTER[lastName] = batHand; // 「山田」で登録
+           if(firstName) ROSTER[lastName + firstName] = batHand; // 「山田太郎」でも登録
+           count++;
+        }
+      }
+    });
+    localStorage.setItem('baseball_roster', JSON.stringify(ROSTER));
+    document.getElementById('roster-status').innerText = `名簿 ${count} 件を紐付け、ブラウザに保存しました！次回から自動で読み込まれます。`;
+    
+    // 画面が開いていれば即座に反映させる
+    if (CURRENT_DATA) updateVisuals();
+  };
+  reader.readAsText(file);
+}
 function parseCSV(text) {
     const rows = []; let currentRow = []; let currentCell = ""; let inQuote = false;
     for (let i = 0; i < text.length; i++) {
@@ -493,9 +542,11 @@ function startAnalysis(role, type) {
     zm.add(new Option("コース別打率", "avg"));
     zm.add(new Option("コース別スイング率", "swing"));
     document.getElementById('zone-filter').classList.add('hidden');
+    if(document.getElementById('zone-batter')) document.getElementById('zone-batter').classList.add('hidden'); // ←追加
   } else {
     zm.add(new Option("コース割合 (球種選択可)", "rate"));
     document.getElementById('zone-filter').classList.remove('hidden');
+    if(document.getElementById('zone-batter')) document.getElementById('zone-batter').classList.remove('hidden'); // ←追加
   }
 
   aggregateStats(role);
@@ -661,25 +712,34 @@ function calcStat(s, r, isBat, context) {
     }
   }
 
-  // --- 4. プロット用 ---
-  let plotType = 'out';
-  if (res.includes("安打")||res.includes("本塁打")||res.includes("二塁打")||res.includes("三塁打")) plotType = 'hit';
+// --- 4. プロット用 ---
+let plotType = 'out';
+  let isHit = res.includes("安打")||res.includes("本塁打")||res.includes("二塁打")||res.includes("三塁打");
+  if (isHit) plotType = 'hit';
   
   if(r[10] && r[11]) {
     s.results.push({ x:r[10], y:r[11], type:plotType, qual:r[9]||"不明" });
   }
 
-  // --- 5. 状況別チャート用のログ保存 ---
+// --- 5. 状況別チャート・コース別動的集計用のログ保存 ---
+  // ★変更：試合データ側の打者名も、背番号とスペースを全て除去して「山田太郎」の形にする
+  const rawBatter = r[2] || "";
+  const cleanBatterName = rawBatter.replace(/^[0-9０-９]+[\s　]+/, '').replace(/[\s　]/g, '');
+
   if (context) {
     s.pitchLogs.push({
       ballType: ball,
       countStr: cnt,
       inning: context.inning,
       runner: context.runner,
-      role: context.role
+      role: context.role,
+      batterName: cleanBatterName, // ★追加：打者の「名前」を記録
+      cx: cx,
+      isSwing: isSwing,
+      isHit: isHit
     });
   }
-}
+} // calcStatはここで終わり
 function renderPlayerList() {
   const c = document.getElementById('player-buttons');
   const sel = document.getElementById('player-search');
@@ -747,8 +807,34 @@ function updateVisuals() {
   const mode = document.getElementById('zone-mode').value;
   const filter = document.getElementById('zone-filter').value;
   
+  // ▼ 左右フィルターの値を取得
+  const batterFilter = document.getElementById('zone-batter') ? document.getElementById('zone-batter').value : "ALL";
+  
+  // ▼ 動的集計用の箱を準備（全25コース）
+  const dynamicCourses = Array(26).fill(0).map(()=>({tot:0, hit:0, swing:0, typeCount:{}}));
+
+  // ▼ pitchLogsを使って、現在のフィルター条件に合う球だけを集計
+  CURRENT_DATA.pitchLogs.forEach(log => {
+    // ヒートマップを描画する瞬間に、名簿(ROSTER)から左右を判定する
+    const batHand = ROSTER[log.batterName] || "不明";
+
+    // 投手の画面で、打者の左右フィルターが指定されている場合は、一致しない球を除外
+    if (CURRENT_MODE.role === 'pitcher' && batterFilter !== "ALL" && batHand !== batterFilter) {
+      return; 
+    }
+    const c = log.cx;
+    if (c >= 1 && c <= 25) {
+      dynamicCourses[c].tot++;
+      if (log.isHit) dynamicCourses[c].hit++;
+      if (log.isSwing) dynamicCourses[c].swing++;
+      if (!dynamicCourses[c].typeCount[log.ballType]) dynamicCourses[c].typeCount[log.ballType] = 0;
+      dynamicCourses[c].typeCount[log.ballType]++;
+    }
+  });
+
+  // ▼ ヒートマップの描画
   for(let i=1; i<=25; i++) {
-    const c = CURRENT_DATA.courses[i];
+    const c = dynamicCourses[i]; 
     const div = document.createElement('div');
     div.className = 'zone-cell';
     if([7,8,9,12,13,14,17,18,19].includes(i)) div.classList.add('strike');
@@ -762,7 +848,7 @@ function updateVisuals() {
       } else if (mode === 'rate') { 
         let targetCount = (filter === 'ALL') ? c.tot : (c.typeCount[filter] || 0);
         let totalTarget = 0;
-        CURRENT_DATA.courses.forEach(cc => totalTarget += (filter==='ALL'?cc.tot:(cc.typeCount[filter]||0)));
+        dynamicCourses.forEach(cc => totalTarget += (filter==='ALL'?cc.tot:(cc.typeCount[filter]||0)));
         if (totalTarget > 0 && targetCount > 0) {
           val = targetCount / totalTarget; text = `${Math.round(val*100)}%`;
           val = val * 3; 
@@ -777,6 +863,7 @@ function updateVisuals() {
     zc.appendChild(div);
   }
 
+  // ▼ Spray Chart（打球方向）の描画処理（復元）
   const sc = document.getElementById('spray-container'); sc.innerHTML = "";
   const sHit = document.getElementById('spray-hit').checked;
   const sOut = document.getElementById('spray-out').checked;
@@ -795,7 +882,6 @@ function updateVisuals() {
     sc.appendChild(d);
   });
 }
-
 function renderChart(d, isBat) {
   const filterDiv = document.getElementById('chart-filters');
   
