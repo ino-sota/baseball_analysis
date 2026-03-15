@@ -388,36 +388,49 @@ function handleCsvUpload(input) {
 let ROSTER = JSON.parse(localStorage.getItem('baseball_roster')) || {}; // 名簿データの保存用 { "山田": "右", "田中": "左" }
 
 // ▼▼ 新規追加：名簿CSV読み込み処理 ▼▼
-// ▼▼ 新規追加：名簿CSV読み込み処理 ▼▼
+// ▼▼ 新規追加：名簿CSV読み込み処理（複数ファイル対応） ▼▼
 function handleRosterUpload(input) {
   if (input.files.length === 0) return;
-  const file = input.files[0];
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const text = e.target.result;
-    const rows = parseCSV(text);
-    let count = 0;
-    rows.forEach(row => {
-      if (row.length >= 6) {
-        const lastName = row[1] ? row[1].replace(/[\s　]/g, '') : "";
-        const firstName = row[2] ? row[2].replace(/[\s　]/g, '') : "";
-        const batHand = row[5] ? row[5].trim() : "";
-        
-        if (lastName && lastName !== "姓" && (batHand === "右" || batHand === "左")) {
-           // ★変更：苗字だけの登録をやめ、姓＋名（フルネーム）だけを登録する
-           const fullName = lastName + firstName;
-           ROSTER[fullName] = batHand; 
-           count++;
+  const files = Array.from(input.files); // 選択された全ファイルを取得
+  let loadedCount = 0; // 読み込み完了したファイル数
+  
+  document.getElementById('roster-status').innerText = "名簿読み込み中...";
+
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const text = e.target.result;
+      const rows = parseCSV(text);
+      
+      rows.forEach(row => {
+        if (row.length >= 6) {
+          const lastName = row[1] ? row[1].replace(/[\s　]/g, '') : "";
+          const firstName = row[2] ? row[2].replace(/[\s　]/g, '') : "";
+          const batHand = row[5] ? row[5].trim() : "";
+          
+          if (lastName && lastName !== "姓" && (batHand === "右" || batHand === "左")) {
+             // 姓＋名（フルネーム）だけを登録する
+             const fullName = lastName + firstName;
+             ROSTER[fullName] = batHand; 
+          }
         }
+      });
+
+      loadedCount++;
+      // 全てのファイルの読み込みが終わったら保存と画面更新を行う
+      if (loadedCount === files.length) {
+        localStorage.setItem('baseball_roster', JSON.stringify(ROSTER));
+        
+        // ROSTERに入っている実際の「ユニークな人数」をカウントして表示
+        const totalPlayers = Object.keys(ROSTER).length;
+        document.getElementById('roster-status').innerText = `${files.length}ファイル (計 ${totalPlayers} 名) を紐付け、保存しました！`;
+        
+        if (CURRENT_DATA) updateVisuals();
+        input.value = ""; // 連続で同じファイルをアップロードできるようにリセット
       }
-    });
-    localStorage.setItem('baseball_roster', JSON.stringify(ROSTER));
-    document.getElementById('roster-status').innerText = `名簿 ${count} 件を紐付け、ブラウザに保存しました！次回から自動で読み込まれます。`;
-    
-    // 画面が開いていれば即座に反映させる
-    if (CURRENT_DATA) updateVisuals();
-  };
-  reader.readAsText(file);
+    };
+    reader.readAsText(file);
+  });
 }
 
 // ▼▼ 新規追加：名簿データのリセット処理 ▼▼
