@@ -94,7 +94,13 @@
     <div style="display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap;">
       <input type="file" id="roster-file" accept=".csv" onchange="handleRosterUpload(this)" multiple>
       <button onclick="clearRoster()" style="padding: 6px 12px; font-size: 0.85rem; background: #dc3545; color: white; border: none; border-radius: 4px;">🗑️ 名簿リセット</button>
+      <button onclick="showRosterDebug()" style="padding: 6px 12px; font-size: 0.85rem; background: #6c757d; color: white; border: none; border-radius: 4px;">🔍 登録状況を確認</button>
     </div>
+    
+    <div id="roster-status" style="margin-top:5px; font-weight:bold; color:var(--primary);">名簿未読み込み</div>
+    
+    <div id="roster-debug-area" class="hidden" style="margin-top: 10px; max-height: 250px; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 10px; text-align: left; font-size: 0.85rem;"></div>
+  </div>
     
     <div id="roster-status" style="margin-top:5px; font-weight:bold; color:var(--primary);">名簿未読み込み</div>
   </div>
@@ -382,6 +388,7 @@ function handleCsvUpload(input) {
 let ROSTER = JSON.parse(localStorage.getItem('baseball_roster')) || {}; // 名簿データの保存用 { "山田": "右", "田中": "左" }
 
 // ▼▼ 新規追加：名簿CSV読み込み処理 ▼▼
+// ▼▼ 新規追加：名簿CSV読み込み処理 ▼▼
 function handleRosterUpload(input) {
   if (input.files.length === 0) return;
   const file = input.files[0];
@@ -392,14 +399,14 @@ function handleRosterUpload(input) {
     let count = 0;
     rows.forEach(row => {
       if (row.length >= 6) {
-        // ★変更：姓と名からスペース(半角/全角)を完全に除去して登録する
         const lastName = row[1] ? row[1].replace(/[\s　]/g, '') : "";
         const firstName = row[2] ? row[2].replace(/[\s　]/g, '') : "";
         const batHand = row[5] ? row[5].trim() : "";
         
         if (lastName && lastName !== "姓" && (batHand === "右" || batHand === "左")) {
-           ROSTER[lastName] = batHand; // 「山田」で登録
-           if(firstName) ROSTER[lastName + firstName] = batHand; // 「山田太郎」でも登録
+           // ★変更：苗字だけの登録をやめ、姓＋名（フルネーム）だけを登録する
+           const fullName = lastName + firstName;
+           ROSTER[fullName] = batHand; 
            count++;
         }
       }
@@ -424,6 +431,32 @@ function clearRoster() {
     // 画面が開いていれば再描画（左右データが消えて「不明」になる）
     if (CURRENT_DATA) updateVisuals();
   }
+}
+// ▼▼ デバッグ用：現在登録されている名簿をアラートで表示する ▼▼
+// ▼▼ デバッグ用：現在登録されている名簿を画面内に一覧表示する ▼▼
+function showRosterDebug() {
+  const area = document.getElementById('roster-debug-area');
+  
+  // すでに表示されていたら隠す（トグル動作）
+  if (!area.classList.contains('hidden')) {
+    area.classList.add('hidden');
+    return;
+  }
+
+  const keys = Object.keys(ROSTER).sort(); // 探しやすくするために並び替え
+  if (keys.length === 0) {
+    area.innerHTML = "<span style='color:red;'>名簿が登録されていません。</span>";
+  } else {
+    // 2列で見やすく一覧表示
+    let html = `現在 <b>${keys.length}</b> 件の名前パターンが登録されています。<br>（※姓のみ、姓名フルネームの両方が登録されます）<br><br><div style="column-count: 2; gap: 20px;">`;
+    keys.forEach(k => {
+      html += `<div style="border-bottom: 1px solid #eee; padding: 2px 0;">[ <b>${k}</b> ] : ${ROSTER[k]}</div>`;
+    });
+    html += "</div>";
+    area.innerHTML = html;
+  }
+  
+  area.classList.remove('hidden');
 }
 function parseCSV(text) {
     const rows = []; let currentRow = []; let currentCell = ""; let inQuote = false;
