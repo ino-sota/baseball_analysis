@@ -168,6 +168,32 @@
             <div class="section-head">状況別チャート</div>
             <div style="height:250px;">
               <canvas id="situation-chart"></canvas>
+              <div id="chart-filters" class="hidden" style="margin-bottom:10px; font-size:0.85rem; background:#f8f9fa; padding:10px; border-radius:5px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                <select id="f-inning-start" onchange="updateSituationChart()" style="padding:5px;">
+                  <option value="1">1回</option><option value="2">2回</option><option value="3">3回</option>
+                  <option value="4">4回</option><option value="5">5回</option><option value="6">6回</option>
+                  <option value="7">7回</option><option value="8">8回</option><option value="9">9回</option>
+                </select> 〜
+                <select id="f-inning-end" onchange="updateSituationChart()" style="padding:5px;">
+                  <option value="9" selected>9回</option><option value="8">8回</option><option value="7">7回</option>
+                  <option value="6">6回</option><option value="5">5回</option><option value="4">4回</option>
+                  <option value="3">3回</option><option value="2">2回</option><option value="1">1回</option>
+                </select>
+                
+                <select id="f-runner" onchange="updateSituationChart()" style="padding:5px;">
+                  <option value="ALL">走者: 全て</option>
+                  <option value="EMPTY">走者なし</option>
+                  <option value="ON">走者あり</option>
+                </select>
+                
+                <select id="f-role" onchange="updateSituationChart()" style="padding:5px;">
+                  <option value="ALL">登板: 全て</option>
+                  <option value="STARTER">先発</option>
+                  <option value="RELIEF">リリーフ</option>
+                </select>
+              
+                <div id="f-pitch-count" style="margin-left:auto; font-weight:bold; color:var(--primary);">対象: - 球</div>
+              </div>
             </div>
           </div>
         </div>
@@ -276,7 +302,14 @@ function processRawData(rows) {
       }
   });
 }
-
+function initStatObj() {
+  return {
+    pa:0, ab:0, h:0, h2:0, h3:0, hr:0, bb:0, so:0, outs:0, pitches:0,
+    courses: Array(26).fill(0).map(()=>({tot:0, hit:0, swing:0, typeCount:{}})),
+    balls: {}, counts: {}, results: [],
+    pitchLogs: [] // ← ★これを追加
+  };
+}
 // ■■■ CSV読み込み処理 (強化版) ■■■
 function handleCsvUpload(input) {
   if (input.files.length === 0) return;
@@ -469,6 +502,7 @@ function startAnalysis(role, type) {
   renderPlayerList();
 }
 
+// ① 重複をなくして綺麗にまとめた aggregateStats
 function aggregateStats(role) {
   STATS_CACHE = {};
   const isBat = (role === 'batter');
@@ -483,23 +517,70 @@ function aggregateStats(role) {
     return isBat ? (atk === SELECTED_TEAM) : (atk !== SELECTED_TEAM);
   });
 
+  const gameTrackers = {}; // 試合ごとの状況トラッキング用
+
   targetLogs.forEach(r => {
-    const name = isBat ? r[2] : r[1];
-    if(!name) return;
+    const gameId = r[0];
+    const inningStr = r[3] || "1回";
+    const res = r[8] ? r[8].replace(/\r?\n/g,'') : "";
+    const rawPitcher = r[1] || "";
+    const pitcherNameForTrack = rawPitcher.replace(/^[0-9０-９]+[\s　]+/, '');
+
+    if (!gameTrackers[gameId]) {
+      gameTrackers[gameId] = { pitchers: new Set(), currentInning: "", hasRunner: false };
+    }
+    const tracker = gameTrackers[gameId];
+
+    // イニング切り替えでランナーリセット
+    if (tracker.currentInning !== inningStr) {
+      tracker.currentInning = inningStr;
+      tracker.hasRunner = false;
+    }
+
+    // 先発/リリーフ判定
+    if (pitcherNameForTrack && !tracker.pitchers.has(pitcherNameForTrack)) {
+      tracker.pitchers.add(pitcherNameForTrack);
+    }
+    const isStarter = Array.from(tracker.pitchers)[0] === pitcherNameForTrack;
+    const roleStr = isStarter ? "STARTER" : "RELIEF";
+
+    // 現在の球を投げる前の走者状態
+    const currentRunnerState = tracker.hasRunner ? "ON" : "EMPTY";
+
+    // この球の結果による出塁判定（次の球からランナーありになる）
+    const onBaseKeywords = ["安打", "二塁打", "三塁打", "本塁打", "四球", "死球", "四死球", "失策", "野選", "エラー"];
+    if (onBaseKeywords.some(k => res.includes(k))) {
+      tracker.hasRunner = true;
+    }
+
+    // 背番号除去
+    let rawName = isBat ? r[2] : r[1];
+    if(!rawName) return;
+    const name = rawName.replace(/^[0-9０-９]+[\s　]+/, '');
+
     if(!STATS_CACHE[name]) STATS_CACHE[name] = initStatObj();
-    calcStat(STATS_CACHE[name], r, isBat);
+    
+    // コンテキストを渡して集計
+    calcStat(STATS_CACHE[name], r, isBat, {
+      inning: parseInt(inningStr) || 1,
+      runner: currentRunnerState,
+      role: roleStr
+    });
   });
 }
 
+// ② 古いものを消して、これを1つだけ残す（pitchLogs入り）
 function initStatObj() {
   return {
     pa:0, ab:0, h:0, h2:0, h3:0, hr:0, bb:0, so:0, outs:0, pitches:0,
     courses: Array(26).fill(0).map(()=>({tot:0, hit:0, swing:0, typeCount:{}})),
-    balls: {}, counts: {}, results: []
+    balls: {}, counts: {}, results: [],
+    pitchLogs: [] // ← ★これがないとエラーで止まります！
   };
 }
-function calcStat(s, r, isBat) {
-  // 4:Count(B-S), 5:Ball, 6:CX, 8:Res, 9:Qual, 10:HX, 11:HY, 12:Spd
+
+// ③ 重複箇所を削り、綺麗にした calcStat
+function calcStat(s, r, isBat, context) {
   const cnt = r[4] || "0-0";
   const ball = r[5] || "不明";
   const cx = parseInt(r[6]); 
@@ -507,7 +588,6 @@ function calcStat(s, r, isBat) {
   const qual = r[9] || ""; // 打球詳細 (ゴロ、フライ等)
   const spd = parseInt(r[12]);
 
-  // カウント分解
   let [bCnt, sCnt] = [0, 0];
   if(cnt.includes("-")) {
     const parts = cnt.split("-");
@@ -533,17 +613,9 @@ function calcStat(s, r, isBat) {
     s.courses[cx].typeCount[ball]++;
   }
 
-  // --- 2. スイング判定 (修正版) ---
-  // A. 結果テキストによる判定 (併殺、犠打、失策などを追加)
-  const swingKeywords = [
-    "空振り", "ファール", "安打", "本塁打", "二塁打", "三塁打", 
-    "ゴロ", "フライ", "ライナー", 
-    "打", "犠", "併殺", "失策"
-  ];
+  // --- 2. スイング判定 ---
+  const swingKeywords = ["空振り", "ファール", "安打", "本塁打", "二塁打", "三塁打", "ゴロ", "フライ", "ライナー", "打", "犠", "併殺", "失策"];
   let isSwing = swingKeywords.some(k => res.includes(k));
-
-  // B. 打球詳細による判定 (「アウト」＋「ゴロ」などを救済)
-  // qual(詳細)が入っていて、かつ「不明」でなければスイングとみなす
   if (qual && qual !== "不明") {
     isSwing = true;
   }
@@ -554,10 +626,9 @@ function calcStat(s, r, isBat) {
     if(cx>=1 && cx<=25) s.courses[cx].swing++;
   }
 
-  // --- 3. 打席結果の判定 (前回の修正を含む) ---
+  // --- 3. 打席結果の判定 ---
   let isPlateAppearance = false;
 
-  // A. 明示的なヒット・四死球・凡打
   if(res.includes("安打")||res.includes("本塁打")||res.includes("二塁打")||res.includes("三塁打")) {
     s.pa++; s.ab++; s.h++; 
     s.balls[ball].hit++;
@@ -581,7 +652,6 @@ function calcStat(s, r, isBat) {
     isPlateAppearance = true;
   } 
   
-  // B. カウントによる自動補正 (三振・四球)
   if (!isPlateAppearance) {
     if (sCnt === 2 && (res.includes("空振り") || res.includes("見逃し") || res.includes("三振"))) {
       s.pa++; s.ab++; s.so++; s.outs++;
@@ -597,6 +667,17 @@ function calcStat(s, r, isBat) {
   
   if(r[10] && r[11]) {
     s.results.push({ x:r[10], y:r[11], type:plotType, qual:r[9]||"不明" });
+  }
+
+  // --- 5. 状況別チャート用のログ保存 ---
+  if (context) {
+    s.pitchLogs.push({
+      ballType: ball,
+      countStr: cnt,
+      inning: context.inning,
+      runner: context.runner,
+      role: context.role
+    });
   }
 }
 function renderPlayerList() {
@@ -716,37 +797,89 @@ function updateVisuals() {
 }
 
 function renderChart(d, isBat) {
-  const ctx = document.getElementById('situation-chart').getContext('2d');
-  if(CHART_INSTANCE) CHART_INSTANCE.destroy();
+  const filterDiv = document.getElementById('chart-filters');
+  
+  if (!isBat) {
+    // 投手：フィルターUIを表示して動的集計を実行
+    if (filterDiv) filterDiv.classList.remove('hidden');
+    updateSituationChart();
+  } else {
+    // 打者：フィルターUIを隠してスイング率を描画
+    if (filterDiv) filterDiv.classList.add('hidden');
+    
+    const ctx = document.getElementById('situation-chart').getContext('2d');
+    if(CHART_INSTANCE) CHART_INSTANCE.destroy();
 
-  const labels = Object.keys(d.counts).sort();
-  if (isBat) {
+    const labels = Object.keys(d.counts).sort();
     const data = labels.map(k => d.counts[k].tot>0 ? (d.counts[k].swing/d.counts[k].tot*100) : 0);
     CHART_INSTANCE = new Chart(ctx, {
       type: 'bar',
       data: { labels: labels, datasets: [{ label: 'カウント別スイング率(%)', data: data, backgroundColor: '#0056b3' }] },
       options: { responsive:true, maintainAspectRatio:false, scales:{y:{max:100}} }
     });
-  } else {
-    const allTypes = Object.keys(d.balls);
-    const datasets = allTypes.map((t, i) => {
-      const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0'];
-      return {
-        label: t,
-        data: labels.map(cnt => { const c = d.counts[cnt]; return c.tot>0 ? ((c.typeCount[t]||0)/c.tot*100) : 0; }),
-        backgroundColor: colors[i % colors.length]
-      };
-    });
-    CHART_INSTANCE = new Chart(ctx, {
-      type: 'bar',
-      data: { labels: labels, datasets: datasets },
-      options: { 
-        responsive:true, maintainAspectRatio:false,
-        scales:{ x:{stacked:true}, y:{stacked:true, max:100} },
-        plugins: { tooltip: { callbacks: { label: (c)=>` ${c.dataset.label}: ${Math.round(c.raw)}%` } } }
-      }
-    });
   }
+}
+
+// ★新規追加関数
+function updateSituationChart() {
+  if (!CURRENT_DATA || CURRENT_MODE.role !== 'pitcher') return;
+  
+  const inStart = parseInt(document.getElementById('f-inning-start').value);
+  const inEnd = parseInt(document.getElementById('f-inning-end').value);
+  const runner = document.getElementById('f-runner').value;
+  const role = document.getElementById('f-role').value;
+
+  const filteredCounts = {};
+  const allTypes = new Set();
+  let totalPitches = 0;
+
+  // 絞り込み条件に合う球だけを集計
+  CURRENT_DATA.pitchLogs.forEach(log => {
+    if (log.inning < inStart || log.inning > inEnd) return;
+    if (runner !== "ALL" && log.runner !== runner) return;
+    if (role !== "ALL" && log.role !== role) return;
+
+    const c = log.countStr;
+    if (!filteredCounts[c]) filteredCounts[c] = { tot: 0, typeCount: {} };
+    
+    filteredCounts[c].tot++;
+    if (!filteredCounts[c].typeCount[log.ballType]) filteredCounts[c].typeCount[log.ballType] = 0;
+    filteredCounts[c].typeCount[log.ballType]++;
+    
+    allTypes.add(log.ballType);
+    totalPitches++;
+  });
+
+  document.getElementById('f-pitch-count').innerText = `対象: ${totalPitches} 球`;
+
+  const ctx = document.getElementById('situation-chart').getContext('2d');
+  if(CHART_INSTANCE) CHART_INSTANCE.destroy();
+
+  const labels = ["0-0", "0-1", "0-2", "1-0", "1-1", "1-2", "2-0", "2-1", "2-2", "3-0", "3-1", "3-2"];
+  Object.keys(filteredCounts).forEach(k => { if (!labels.includes(k)) labels.push(k); });
+
+  const typesArray = Array.from(allTypes);
+  const datasets = typesArray.map((t, i) => {
+    const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0'];
+    return {
+      label: t,
+      data: labels.map(cnt => { 
+        const c = filteredCounts[cnt]; 
+        return (c && c.tot > 0) ? ((c.typeCount[t] || 0) / c.tot * 100) : 0; 
+      }),
+      backgroundColor: colors[i % colors.length]
+    };
+  });
+
+  CHART_INSTANCE = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: labels, datasets: datasets },
+    options: { 
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { stacked: true }, y: { stacked: true, max: 100 } },
+      plugins: { tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${Math.round(c.raw)}%` } } }
+    }
+  });
 }
 
 function renderTable(d, isBat) {
