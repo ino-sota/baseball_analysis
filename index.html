@@ -90,7 +90,12 @@
   <div class="card upload-area" style="background: #eef5fc; border-color: #b6d4fe;">
     <div style="font-weight:bold; margin-bottom:5px;">📋 選手名簿(CSV)の取り込み</div>
     <div style="font-size:0.8rem; color:#666; margin-bottom:10px;">A列:背番号, B列:姓, C列:名, D列:学年, E列:投, F列:打 のCSVを読み込ませると、投手のコース別データで「打者の左右」による絞り込みが可能になります。</div>
-    <input type="file" id="roster-file" accept=".csv" onchange="handleRosterUpload(this)">
+    
+    <div style="display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <input type="file" id="roster-file" accept=".csv" onchange="handleRosterUpload(this)" multiple>
+      <button onclick="clearRoster()" style="padding: 6px 12px; font-size: 0.85rem; background: #dc3545; color: white; border: none; border-radius: 4px;">🗑️ 名簿リセット</button>
+    </div>
+    
     <div id="roster-status" style="margin-top:5px; font-weight:bold; color:var(--primary);">名簿未読み込み</div>
   </div>
   <div id="step-team" class="card">
@@ -406,6 +411,19 @@ function handleRosterUpload(input) {
     if (CURRENT_DATA) updateVisuals();
   };
   reader.readAsText(file);
+}
+
+// ▼▼ 新規追加：名簿データのリセット処理 ▼▼
+function clearRoster() {
+  if (confirm("保存されている名簿データを全て消去しますか？\n（消去後は、最新の名簿CSVを再度読み込んでください）")) {
+    ROSTER = {}; // メモリ上のデータを空にする
+    localStorage.removeItem('baseball_roster'); // ブラウザの記憶を消す
+    document.getElementById('roster-status').innerText = "名簿データをリセットしました。";
+    document.getElementById('roster-file').value = ""; // 選択中のファイルをクリア
+    
+    // 画面が開いていれば再描画（左右データが消えて「不明」になる）
+    if (CURRENT_DATA) updateVisuals();
+  }
 }
 function parseCSV(text) {
     const rows = []; let currentRow = []; let currentCell = ""; let inQuote = false;
