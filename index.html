@@ -388,49 +388,36 @@ function handleCsvUpload(input) {
 let ROSTER = JSON.parse(localStorage.getItem('baseball_roster')) || {}; // 名簿データの保存用 { "山田": "右", "田中": "左" }
 
 // ▼▼ 新規追加：名簿CSV読み込み処理 ▼▼
-// ▼▼ 新規追加：名簿CSV読み込み処理（複数ファイル対応） ▼▼
+// ▼▼ 新規追加：名簿CSV読み込み処理 ▼▼
 function handleRosterUpload(input) {
   if (input.files.length === 0) return;
-  const files = Array.from(input.files); // 選択された全ファイルを取得
-  let loadedCount = 0; // 読み込み完了したファイル数
-  
-  document.getElementById('roster-status').innerText = "名簿読み込み中...";
-
-  files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      const text = e.target.result;
-      const rows = parseCSV(text);
-      
-      rows.forEach(row => {
-        if (row.length >= 6) {
-          const lastName = row[1] ? row[1].replace(/[\s　]/g, '') : "";
-          const firstName = row[2] ? row[2].replace(/[\s　]/g, '') : "";
-          const batHand = row[5] ? row[5].trim() : "";
-          
-          if (lastName && lastName !== "姓" && (batHand === "右" || batHand === "左")) {
-             // 姓＋名（フルネーム）だけを登録する
-             const fullName = lastName + firstName;
-             ROSTER[fullName] = batHand; 
-          }
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const rows = parseCSV(text);
+    let count = 0;
+    rows.forEach(row => {
+      if (row.length >= 6) {
+        const lastName = row[1] ? row[1].replace(/[\s　]/g, '') : "";
+        const firstName = row[2] ? row[2].replace(/[\s　]/g, '') : "";
+        const batHand = row[5] ? row[5].trim() : "";
+        
+        if (lastName && lastName !== "姓" && (batHand === "右" || batHand === "左")) {
+           // ★変更：苗字だけの登録をやめ、姓＋名（フルネーム）だけを登録する
+           const fullName = lastName + firstName;
+           ROSTER[fullName] = batHand; 
+           count++;
         }
-      });
-
-      loadedCount++;
-      // 全てのファイルの読み込みが終わったら保存と画面更新を行う
-      if (loadedCount === files.length) {
-        localStorage.setItem('baseball_roster', JSON.stringify(ROSTER));
-        
-        // ROSTERに入っている実際の「ユニークな人数」をカウントして表示
-        const totalPlayers = Object.keys(ROSTER).length;
-        document.getElementById('roster-status').innerText = `${files.length}ファイル (計 ${totalPlayers} 名) を紐付け、保存しました！`;
-        
-        if (CURRENT_DATA) updateVisuals();
-        input.value = ""; // 連続で同じファイルをアップロードできるようにリセット
       }
-    };
-    reader.readAsText(file);
-  });
+    });
+    localStorage.setItem('baseball_roster', JSON.stringify(ROSTER));
+    document.getElementById('roster-status').innerText = `名簿 ${count} 件を紐付け、ブラウザに保存しました！次回から自動で読み込まれます。`;
+    
+    // 画面が開いていれば即座に反映させる
+    if (CURRENT_DATA) updateVisuals();
+  };
+  reader.readAsText(file);
 }
 
 // ▼▼ 新規追加：名簿データのリセット処理 ▼▼
@@ -970,7 +957,7 @@ function renderChart(d, isBat) {
   }
 }
 
-// ★新規追加関数
+// ★状況別チャート（色と並び順を統一したバージョン）
 function updateSituationChart() {
   if (!CURRENT_DATA || CURRENT_MODE.role !== 'pitcher') return;
   
@@ -1008,16 +995,47 @@ function updateSituationChart() {
   const labels = ["0-0", "0-1", "0-2", "1-0", "1-1", "1-2", "2-0", "2-1", "2-2", "3-0", "3-1", "3-2"];
   Object.keys(filteredCounts).forEach(k => { if (!labels.includes(k)) labels.push(k); });
 
+  // ▼▼ 追加：球種ごとの「固定カラー」と「並び順」のマスターリスト ▼▼
+  const PITCH_COLORS = {
+    "ストレート": "#e6194b", // 赤
+    "ツーシーム": "#f58231", // オレンジ
+    "カットボール": "#ffe119", // 黄色
+    "スライダー": "#3cb44b", // 緑
+    "カーブ": "#4363d8",    // 青
+    "フォーク": "#911eb4",  // 紫
+    "スプリット": "#f032e6", // ピンク
+    "チェンジアップ": "#46f0f0", // 水色
+    "シンカー": "#bcf60c",  // ライム
+    "シュート": "#fabebe",   // 薄ピンク
+    "不明": "#999999"        // グレー
+  };
+  // マスターにない新しい球種が来た時用の予備カラー
+  const FALLBACK_COLORS = ['#008080', '#800000', '#000075', '#808080', '#9a6324'];
+
   const typesArray = Array.from(allTypes);
+
+  // ▼▼ 追加：ストレート系を下、変化球を上に統一して並び替える ▼▼
+  const pitchOrder = ["ストレート", "ツーシーム", "カットボール", "スライダー", "カーブ", "フォーク", "スプリット", "チェンジアップ", "シンカー", "シュート", "不明"];
+  typesArray.sort((a, b) => {
+    let idxA = pitchOrder.indexOf(a);
+    let idxB = pitchOrder.indexOf(b);
+    if (idxA === -1) idxA = 99; // リストにない球種は一番上（後ろ）に回す
+    if (idxB === -1) idxB = 99;
+    return idxA - idxB;
+  });
+
+  // グラフ用データセットの作成
   const datasets = typesArray.map((t, i) => {
-    const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0'];
+    // マスターに色が設定されていればそれを使い、無ければ予備カラーを使う
+    let bgColor = PITCH_COLORS[t] || FALLBACK_COLORS[i % FALLBACK_COLORS.length];
+
     return {
       label: t,
       data: labels.map(cnt => { 
         const c = filteredCounts[cnt]; 
         return (c && c.tot > 0) ? ((c.typeCount[t] || 0) / c.tot * 100) : 0; 
       }),
-      backgroundColor: colors[i % colors.length]
+      backgroundColor: bgColor
     };
   });
 
